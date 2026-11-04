@@ -1,0 +1,59 @@
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "kohakutui"
+# maturin reads the version from Cargo.toml.
+dynamic = ["version"]
+description = "Terminal UI engine in Rust, driven by a Python SDK: inline and full-screen TUIs for agents and training jobs"
+authors = [
+    { name = "Shih-Ying Yeh(KohakuBlueLeaf)", email = "apolloyeh0123@gmail.com" },
+]
+license = { text = "Apache-2.0" }
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Rust",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Environment :: Console",
+    "Topic :: Terminals",
+    "Topic :: Software Development :: User Interfaces",
+]
+
+[project.optional-dependencies]
+tqdm = ["tqdm>=4.66"]
+# Testing and linting.
+dev = [
+    "maturin>=1.7,<2",
+    "pytest>=9.0.0",
+    "pytest-timeout>=2.3.0",
+    "black>=26.3.0",
+    "isort>=8.0.0",
+    "ruff>=0.9.0",
+]
+
+[tool.maturin]
+python-source = "src"
+module-name = "kohakutui._rs"
+features = ["python", "highlight"]
+include = ["src/kohakutui/**/*.pyi", "src/kohakutui/py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# 60s per-test cap: a safety net for deadlocks in engine threads.
+timeout = 60
+timeout_method = "thread"
+
+[tool.ruff.lint]
+preview = true
+explicit-preview-rules = true
+select = ["F401", "F841", "PLW1514"]

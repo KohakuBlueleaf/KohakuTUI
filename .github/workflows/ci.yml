@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install ruff black
+      - run: ruff check src/ tests/
+      - run: black --check src/ tests/
+
+  rust:
+    name: Rust (fmt, clippy, stage tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo clippy --all-targets --features python,highlight,testing -- -D warnings
+      # Without the python feature the test binary links nothing of Python
+      - run: cargo test --no-default-features
+      - name: One crossterm in the dependency graph
+        run: |
+          n=$(cargo tree -e normal -i crossterm --depth 0 2>/dev/null | grep -c '^crossterm' || true)
+          test "$n" -le 1 || { cargo tree -d; exit 1; }
+
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: astral-sh/setup-uv@v6
+      # The testing feature adds _Session.inject for scenario tests; release wheels leave it out
+      - name: Build the wheel
+        shell: bash
+        run: |
+          uv venv
+          uv pip install maturin
+          uv run --no-project maturin build --release --features python,highlight,testing --out dist
+      - name: Install the built wheel
+        shell: bash
+        run: |
+          WHEEL=$(ls dist/*.whl)
+          uv pip install "${WHEEL}[dev]"
+      - name: Tests
+        run: uv run --no-project pytest tests/ -q --tb=short

@@ -1,0 +1,44 @@
+[package]
+name = "kohakutui"
+version = "0.0.1"
+edition = "2021"
+description = "Terminal UI engine (kohakutui._rs) driven by a Python SDK"
+license = "Apache-2.0"
+# tests/ holds the Python suite; Rust tests live in each module's tests.rs
+autotests = false
+
+[lib]
+name = "kohakutui_rs"
+path = "src/kohakutui-rust/lib.rs"
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+python = ["dep:pyo3"]
+highlight = ["dep:syntect"]
+# _Session.inject and other test-only hooks; CI wheels only
+testing = []
+
+[dependencies]
+pyo3 = { version = "0.30", features = ["extension-module", "abi3-py310"], optional = true }
+ratatui = { version = "0.30", default-features = false, features = ["crossterm", "scrolling-regions", "unstable-rendered-line-info"] }
+crossterm = { version = "0.29", features = ["bracketed-paste", "use-dev-tty"] }
+crossbeam-channel = "0.5"
+rmpv = { version = "1.3", features = ["with-serde"] }
+rmp-serde = "1.3"
+serde = { version = "1", features = ["derive"] }
+pulldown-cmark = { version = "0.13", default-features = false }
+unicode-width = "0.2"
+unicode-segmentation = "1"
+textwrap = { version = "0.16", features = ["unicode-linebreak", "unicode-width"] }
+thiserror = "2"
+syntect = { version = "5.3", optional = true, default-features = false, features = ["default-fancy"] }
+
+[dev-dependencies]
+insta = "1"
+vt100 = "0.18"
+proptest = "1"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1

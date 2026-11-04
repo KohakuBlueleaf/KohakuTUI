@@ -1,0 +1,40 @@
+# Local working notes
+/plans/
+.claude/
+temp/
+
+# Rust
+/target/
+*.pdb
+
+# Built extension (maturin develop / editable installs)
+*.so
+*.pyd
+*.dylib
+
+# Python
+__pycache__/
+*.py[codz]
+*$py.class
+build/
+dist/
+wheels/
+*.egg-info/
+.eggs/
+.venv/
+.venv-*/
+venv/
+
+# Tests and tooling
+.pytest_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.snap.new
+*.pending-snap
+
+# Editors
+.vscode/
+.idea/
