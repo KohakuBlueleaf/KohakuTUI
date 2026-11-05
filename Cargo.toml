@@ -1,6 +1,6 @@
 [package]
 name = "kohakutui"
-version = "0.0.1"
+version = "0.1.0"
 edition = "2021"
 description = "Terminal UI engine (kohakutui._rs) driven by a Python SDK"
 license = "Apache-2.0"

@@ -1,5 +1,6 @@
 """Journey: the shipped demos and CLI run end to end on the emulated terminal."""
 
+import importlib.metadata
 import time
 import threading
 
@@ -193,6 +194,6 @@ def test_dashboard_demo_fills_its_main_pane_and_panel():
 
 def test_cli_prints_version_and_rejects_unknown_commands(capsys: pytest.CaptureFixture):
     assert main(["version"]) == 0
-    assert capsys.readouterr().out.strip() == "0.0.1"
+    assert capsys.readouterr().out.strip() == importlib.metadata.version("kohakutui")
     assert main(["nope"]) == 2
     assert "usage:" in capsys.readouterr().out
