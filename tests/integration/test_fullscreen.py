@@ -88,6 +88,11 @@ class TestFullscreen:
             until(app, lambda: ("select", "t2") in events)
             app.inject({"middle": (x, 0)})
             until(app, lambda: ("close", "t2") in events)
+            # a click on a tab's × closes it too
+            x, _ = _row(app, "tab3 ×")
+            app.inject({"click": (x + len("tab3 "), 0)})
+            until(app, lambda: ("close", "t3") in events)
+            assert ("select", "t3") not in events
 
             # the last tab active: scrolled by whole tabs behind a ‹ mark
             strip.update(active=7)

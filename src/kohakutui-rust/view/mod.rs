@@ -107,6 +107,10 @@ pub struct ViewState {
     /// The bottom region as drawn in full screen (clicks focus what is under them).
     pub(crate) bottom_rows: Vec<(u16, u16, NodeId, u16)>,
     pub(crate) bottom_area: ratatui::layout::Rect,
+    /// The transcript's rect on the last full-screen frame, and the rows of its top-level
+    /// nodes that are not cells (pages: trees, tables), which take clicks like pane content.
+    pub(crate) main_area: ratatui::layout::Rect,
+    pub(crate) doc_rows: Vec<(u16, u16, NodeId, u16)>,
     /// The document drawn on the last frame: a change (shown, or the shown one removed) resets
     /// the per-document view state.
     pub(crate) shown: NodeId,
@@ -195,6 +199,8 @@ impl ViewState {
             head_area: ratatui::layout::Rect::default(),
             bottom_rows: Vec::new(),
             bottom_area: ratatui::layout::Rect::default(),
+            main_area: ratatui::layout::Rect::default(),
+            doc_rows: Vec::new(),
             shown: crate::model::TRANSCRIPT,
             anchor: None,
             unseen: 0,

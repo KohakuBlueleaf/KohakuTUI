@@ -61,6 +61,7 @@ pub(crate) fn panes(m: &Model) -> Vec<(NodeId, &Pane)> {
     m.children(PANELS)
         .iter()
         .filter_map(|&id| m.comp_as::<Pane>(id).map(|p| (id, p)))
+        .filter(|(_, p)| !p.hidden)
         .collect()
 }
 
@@ -429,6 +430,14 @@ pub(crate) fn mouse(
             // a press inside a pane started no selection: its drag and release are no-ops
             _ => false,
         });
+    }
+    // a page's tree or table in the transcript area
+    if inside(vs.main_area) && kind == MouseEventKind::Down(MouseButton::Left) {
+        if let Some(at) = node_at(&vs.doc_rows, vs.main_area.x, col, row) {
+            let width = vs.main_area.width;
+            vs.selection = None;
+            return Some(click(m, vs, Some(at), MouseAct::Click, width, events));
+        }
     }
     // a click on the input (or a row under it) gives it the keys
     if inside(vs.bottom_area) {

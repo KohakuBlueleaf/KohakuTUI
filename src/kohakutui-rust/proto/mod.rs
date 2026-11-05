@@ -95,6 +95,9 @@ pub enum Op {
         /// Inline: a line written to scrollback before the document's own (a "── name ──"
         /// divider), so it belongs to the switch and to no document.
         note: Option<String>,
+        /// Full screen: the first time it is shown, start at its top (a page) rather than
+        /// following its end (a conversation).
+        top: bool,
     },
     /// Links as OSC 8 hyperlinks (true, the default on a terminal) or written as "text (url)".
     /// Send it before drawing: text already laid out keeps its form.

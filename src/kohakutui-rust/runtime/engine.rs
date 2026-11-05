@@ -270,8 +270,9 @@ impl Engine {
             Op::Bell => {
                 let _ = self.term.bell();
             }
-            Op::ShowDoc { id, note } => {
+            Op::ShowDoc { id, note, top } => {
                 let before = self.model.doc();
+                let seen = self.vs.doc_scroll.contains_key(&id);
                 if !self.model.show_doc(id) {
                     self.report(Some(id), format!("node {id} is not a document"));
                 } else if before != id {
@@ -279,6 +280,10 @@ impl Engine {
                         self.notes.push(n);
                     }
                     self.vs.switch_doc(&self.model);
+                    if top && !seen {
+                        // the layout clamps this to the top of the document
+                        self.vs.scroll = usize::MAX / 2;
+                    }
                 }
             }
             Op::SetLinks { osc8 } => {

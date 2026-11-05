@@ -203,7 +203,8 @@ Drawn in full screen only, so an inline app can build them and lose nothing.
 ### `Pane`
 
 A side column under `app.panels`: `side` `"left"` or `"right"`, `width` columns (at least
-`min`), `title`, `collapsed` to a one-column strip. Children stack inside; the wheel scrolls
+`min`), `title`, `collapsed` to a one-column strip, `hidden` not laid out at all (its
+content hidden too). Children stack inside; the wheel scrolls
 it. The user drags its divider, double-clicks the divider to collapse it, clicks the strip
 to open it, and, with keys inside it, moves the divider with alt+←/→. Each change is a `pane`
 event (`id`, `width`, `collapsed`) for the app to remember. When the main pane would get
@@ -219,7 +220,7 @@ tree = rail.add(Tree(items=[{"label": "root", "value": "root"}]))
 
 ### `TabStrip`
 
-A row of tabs, usually in `app.head`: `tabs` as `[{"label", "value", "dot", "badge",
+A row of tabs, usually in `app.head` (full width, above the panes): `tabs` as `[{"label", "value", "dot", "badge",
 "closable"}]` (`dot` a tone for a status dot, `badge` a count), `active` the index. Click or
 ←/→ selects (`select` with the value), a middle click or ctrl+w on a closable tab closes it
 (`close` with the value as the reason). A strip wider than its row scrolls by whole tabs

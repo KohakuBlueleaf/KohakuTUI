@@ -54,6 +54,7 @@ impl Op {
             "show_doc" => Op::ShowDoc {
                 id: req_id(v, "id")?,
                 note: get(v, "note").and_then(Value::as_str).map(str::to_owned),
+                top: get(v, "top").and_then(Value::as_bool).unwrap_or(false),
             },
             "copy" => Op::Copy { text: req_str(v, "text")?.to_owned() },
             "set_links" => {

@@ -425,7 +425,8 @@ class Document(Component):
 @dataclass
 class Pane(Component):
     """A full-screen side column under ``app.panels``: ``side`` ``"left"`` or ``"right"``,
-    ``width`` columns (at least ``min``), ``collapsed`` to a one-column strip, ``title`` on top.
+    ``width`` columns (at least ``min``), ``collapsed`` to a one-column strip, ``title`` on top,
+    ``hidden`` not laid out at all.
 
     The user drags its divider, double-clicks it to collapse, clicks the strip to open, and
     with the keys inside it moves the divider with alt+←/→; each change is a ``pane`` event
@@ -438,6 +439,7 @@ class Pane(Component):
     width: int | None = None
     min: int | None = None
     collapsed: bool | None = None
+    hidden: bool | None = None
     title: str | None = None
 
 

@@ -79,10 +79,13 @@ impl Op {
             ]),
             Op::Bell => map(vec![("op", "bell".into())]),
             Op::Copy { text } => map(vec![("op", "copy".into()), ("text", text.as_str().into())]),
-            Op::ShowDoc { id, note } => {
+            Op::ShowDoc { id, note, top } => {
                 let mut m = vec![("op", "show_doc".into()), ("id", (*id).into())];
                 if let Some(n) = note {
                     m.push(("note", n.as_str().into()));
+                }
+                if *top {
+                    m.push(("top", true.into()));
                 }
                 map(m)
             }

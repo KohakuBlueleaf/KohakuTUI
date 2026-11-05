@@ -212,9 +212,10 @@ pub fn handle_mouse(
         return done;
     }
     let header_at = |vs: &ViewState| {
+        let x = vs.main_area.x;
         vs.hits
             .iter()
-            .find(|(y, w, _)| *y == row && col < *w)
+            .find(|(y, w, _)| *y == row && col >= x && col < x + *w)
             .map(|&(_, _, id)| id)
     };
     match kind {

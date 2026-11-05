@@ -28,7 +28,7 @@ The screen is a few fixed regions. Every node lives in one of them.
 | `live` | what is happening now: spinners, progress, running tools | redrawn above the bottom | under the main pane |
 | `bottom` | input and status: composer, buttons, footer | always at the bottom | bottom |
 | `panels` | side information: `Pane` columns (or anything else, drawn as a right third) | hidden | side panes |
-| `head` | a row over the transcript, usually a `TabStrip` | hidden | above the main pane |
+| `head` | a row across the top, usually a `TabStrip` of pages | hidden | top row, above the panes |
 | `overlays` | dialogs | at the input, or above it | at the input (docked) or a centred box |
 
 ### Documents
@@ -38,7 +38,9 @@ same way. `app.show_document(doc, note=None)` puts it where the transcript is: o
 document is drawn, takes keys and (inline) reaches scrollback; a hidden one keeps changing and
 writes its unflushed lines when shown again, after `note` (a divider such as `── planner ──`
 that belongs to the switch, not to either document). Full screen keeps each document's scroll.
-A conversation app gives each conversation (an agent, a channel) its own document.
+A conversation app gives each conversation (an agent, a channel) its own document, and a
+page (a status board, a file tree) can be one too: `show_document(page, top=True)` opens it
+at its top the first time; a tree or other input at its top level takes clicks.
 
 ## Nodes
 

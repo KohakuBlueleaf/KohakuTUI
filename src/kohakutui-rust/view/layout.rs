@@ -18,7 +18,7 @@ use super::{Anchor, Mode};
 use crate::model::{FlushState, Model, BOTTOM, HEAD, LIVE, OVERLAYS, PANELS};
 use crate::proto::{Level, NodeId};
 use crate::text::{clip, display_width, theme};
-use crate::widgets::{Cell, Ctx, Role};
+use crate::widgets::{Cell, Ctx, Pane, Role};
 
 /// The inline viewport: its lines, the caret within them, and where the top overlay's content
 /// is: (overlay, row, col, width, height), the row possibly above the viewport when cut.
@@ -271,6 +271,9 @@ struct Transcript {
     prompts: Vec<usize>,
     /// Each top-level node's first line (its separator included), in order.
     bases: Vec<(NodeId, usize)>,
+    /// Top-level nodes that are not cells and take input (a page's tree): (first line after
+    /// the separator, lines, node).
+    plain: Vec<(usize, usize, NodeId)>,
 }
 
 fn transcript_all(m: &Model, vs: &mut ViewState, width: u16, ctx: &Ctx) -> Transcript {
@@ -280,6 +283,7 @@ fn transcript_all(m: &Model, vs: &mut ViewState, width: u16, ctx: &Ctx) -> Trans
     let mut scrolls = Vec::new();
     let mut prompts = Vec::new();
     let mut bases = Vec::new();
+    let mut plain = Vec::new();
     for &id in m.children(m.doc()) {
         bases.push((id, out.len()));
         out.extend(separator(m, id));
@@ -317,12 +321,16 @@ fn transcript_all(m: &Model, vs: &mut ViewState, width: u16, ctx: &Ctx) -> Trans
                 rendered
             }
         };
+        // (only ones that take input: text and links keep the transcript's own handling)
+        if m.comp_as::<Cell>(id).is_none() && node.comp.focusable() && !node.sealed {
+            plain.push((base, lines.len(), id));
+        }
         heads.extend(h.into_iter().map(|(i, n)| (base + i, n)));
         scrolls.extend(sc.into_iter().map(|(i, len, n)| (base + i, len, n)));
         out.extend(lines);
     }
     vs.cache.retain(|id, _| m.contains(*id));
-    Transcript { lines: out, heads, scrolls, prompts, bases }
+    Transcript { lines: out, heads, scrolls, prompts, bases, plain }
 }
 
 fn draw_lines(buf: &mut Buffer, area: Rect, lines: &[Line<'static>]) {
@@ -345,16 +353,31 @@ pub fn fullscreen(
     let width = area.width;
     vs.screen_width = width;
 
-    // panes take the full height; the chat column between them holds the head row, the
+    // the head row (a tab strip of pages) across the top, over everything else
+    let (head, head_rows) = panes::stacked(m, HEAD, width, ctx, target);
+    let head_h = head.len().min(3).min(area.height as usize / 4) as u16;
+    draw_lines(buf, Rect::new(area.x, area.y, width, head_h), &head);
+    vs.head_rows = panes::visible_rows(&head_rows, 0, head_h as usize, area.y);
+    vs.head_area = Rect::new(area.x, area.y, width, head_h);
+    let body = Rect::new(area.x, area.y + head_h, width, area.height - head_h);
+
+    // under it panes take the full height; the chat column between them holds the
     // transcript, the toasts, the live rows and the input
     let pane_list = !panes::panes(m).is_empty();
     let (mut column, mut pane_hits) = if pane_list {
-        panes::split(m, area)
+        panes::split(m, body)
     } else {
-        (area, Vec::new())
+        (body, Vec::new())
     };
     // without panes, other panel content takes the right third
-    let has_panels = !pane_list && !m.children(PANELS).is_empty() && width >= 60;
+    // (panel content that is not a pane; a hidden pane is not laid out at all)
+    let loose: Vec<NodeId> = m
+        .children(PANELS)
+        .iter()
+        .copied()
+        .filter(|&id| m.comp_as::<Pane>(id).is_none())
+        .collect();
+    let has_panels = !pane_list && !loose.is_empty() && width >= 60;
     let panel_w = if has_panels {
         (width / 3).clamp(24, 60)
     } else {
@@ -398,17 +421,8 @@ pub fn fullscreen(
     let main = Rect::new(column.x, column.y, cw, main_h);
     let below = column.y + main_h;
 
-    // the head row (a tab strip) over the transcript
-    let (head, head_rows) = panes::stacked(m, HEAD, main.width, ctx, target);
-    let head_h = head.len().min(3).min(main.height as usize / 2) as u16;
-    draw_lines(buf, Rect::new(main.x, main.y, main.width, head_h), &head);
-    vs.head_rows = panes::visible_rows(&head_rows, 0, head_h as usize, main.y);
-    vs.head_area = Rect::new(main.x, main.y, main.width, head_h);
-    let main = Rect::new(main.x, main.y + head_h, main.width, main.height.saturating_sub(head_h));
-    let main_h = main.height;
-
     let t = transcript_all(m, vs, main.width, ctx);
-    let Transcript { lines, heads, scrolls, prompts, bases } = t;
+    let Transcript { lines, heads, scrolls, prompts, bases, plain } = t;
     let total = lines.len();
     let h = main_h as usize;
     // follow: scrolled up, the line at the top of the view stays there whatever changes below
@@ -445,6 +459,9 @@ pub fn fullscreen(
     let end = total - vs.scroll;
     let start = end.saturating_sub(h);
     draw_lines(buf, main, &lines[start..end]);
+    vs.main_area = main;
+    // top-level nodes that are not cells (a page's tree or table) take clicks
+    vs.doc_rows = panes::visible_rows(&plain, start, end - start, main.y);
     if vs.scroll > 0 {
         // the node holding the top line, and how far into it, for the next frame
         if let Some(&(node, base)) = bases.iter().rev().find(|(_, b)| *b <= start) {
@@ -516,11 +533,11 @@ pub fn fullscreen(
     }
     vs.pane_hits = pane_hits;
     if has_panels {
-        let pane = Rect::new(column.x + cw, area.y, panel_w, area.height);
+        let pane = Rect::new(column.x + cw, body.y, panel_w, body.height);
         let inner = pane.width.saturating_sub(2);
         let mut sink = None;
         let mut panel_lines = Vec::new();
-        for (i, &p) in m.children(PANELS).iter().enumerate() {
+        for (i, &p) in loose.iter().enumerate() {
             if i > 0 {
                 panel_lines.push(Line::default());
             }

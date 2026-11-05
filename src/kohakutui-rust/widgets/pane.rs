@@ -20,12 +20,21 @@ pub struct Pane {
     pub width: usize,
     pub min: usize,
     pub collapsed: bool,
+    /// Not laid out at all (an app showing a page that has no use for it).
+    pub hidden: bool,
     pub title: Option<String>,
 }
 
 impl Default for Pane {
     fn default() -> Self {
-        Pane { side_left: false, width: 32, min: 16, collapsed: false, title: None }
+        Pane {
+            side_left: false,
+            width: 32,
+            min: 16,
+            collapsed: false,
+            hidden: false,
+            title: None,
+        }
     }
 }
 
@@ -44,6 +53,9 @@ impl Component for Pane {
         if let Some(v) = get(p, "collapsed") {
             self.collapsed = v.as_bool().unwrap_or(false);
         }
+        if let Some(v) = get(p, "hidden") {
+            self.hidden = v.as_bool().unwrap_or(false);
+        }
         upd_opt_str(p, "title", &mut self.title);
         Ok(())
     }
@@ -54,6 +66,11 @@ impl Component for Pane {
 
     fn container(&self) -> bool {
         true
+    }
+
+    // a hidden pane hides its content too (no focus, no keys)
+    fn shows_child(&self, _index: usize) -> bool {
+        !self.hidden
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -99,8 +116,9 @@ impl TabStrip {
         if let Some(b) = t.badge.as_ref().filter(|b| !b.is_empty()) {
             spans.push(Span::styled(format!(" {b}"), base.patch(fg_of(theme::warn()))));
         }
-        if t.closable && on {
-            spans.push(Span::styled(" ×", base));
+        // every closable tab carries its ×, so tabs keep their width when the active one moves
+        if t.closable {
+            spans.push(Span::styled(" ×", base.patch(fg_of(theme::faint()))));
         }
         spans.push(Span::styled(" ", base));
         spans
@@ -249,8 +267,14 @@ impl Component for TabStrip {
             .spans_at()
             .iter()
             .position(|&(x, w)| col >= x && col < x + w);
+        // the × and the columns around it close the tab instead of choosing it
+        let on_close = |i: usize| {
+            let (x, w) = self.spans_at()[i];
+            self.tabs[i].closable && col + 3 >= x + w
+        };
         match (hit, m.act) {
             (Some(i), MouseAct::Middle) => self.close(i, out),
+            (Some(i), _) if on_close(i) => self.close(i, out),
             (Some(i), _) => self.choose(i, out),
             _ => return false,
         }

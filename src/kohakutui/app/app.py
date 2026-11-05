@@ -82,14 +82,19 @@ class App(CoreMixin, ControlMixin, DialogsMixin, CaptureMixin):
         """
         return self._docs.add(Document())
 
-    def show_document(self, document: Node, note: str | None = None) -> None:
+    def show_document(
+        self, document: Node, note: str | None = None, top: bool = False
+    ) -> None:
         """Shows ``document`` (or ``app.transcript``) where the transcript is. Full screen keeps
         each document's scroll; inline, its lines not yet in scrollback are written now, after
-        ``note`` (a divider line that belongs to the switch, not to either document).
+        ``note`` (a divider line that belongs to the switch, not to either document). With
+        ``top`` (a page rather than a conversation) full screen first shows its top.
         """
         op: dict = {"op": "show_doc", "id": document.id}
         if note:
             op["note"] = note
+        if top:
+            op["top"] = True
         self.send([op])
 
     def start(self) -> "App":
