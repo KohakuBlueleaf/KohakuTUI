@@ -1,0 +1,50 @@
+//! The input thread: reads terminal events and forwards keys, pastes and resizes.
+
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
+
+use crossbeam_channel::{unbounded, Receiver};
+use crossterm::event::{self, Event as TermEvent, KeyEventKind};
+
+use super::InputEv;
+use crate::widgets::Input;
+
+/// Starts reading; the thread stops within one poll interval after `stop` is set.
+pub(crate) fn spawn(stop: Arc<AtomicBool>) -> (Receiver<InputEv>, Option<JoinHandle<()>>) {
+    let (tx, rx) = unbounded();
+    let handle = thread::Builder::new()
+        .name("kohakutui-input".into())
+        .spawn(move || {
+            while !stop.load(Ordering::SeqCst) {
+                match event::poll(Duration::from_millis(50)) {
+                    Ok(true) => {}
+                    Ok(false) => continue,
+                    Err(_) => break,
+                }
+                let ev = match event::read() {
+                    Ok(ev) => ev,
+                    Err(_) => break,
+                };
+                let msg = match ev {
+                    // Windows reports releases too; only presses and repeats are input
+                    TermEvent::Key(k) if k.kind != KeyEventKind::Release => {
+                        InputEv::Input(Input::Key {
+                            code: k.code,
+                            mods: k.modifiers,
+                            at: Instant::now(),
+                        })
+                    }
+                    TermEvent::Paste(s) => InputEv::Input(Input::Paste(s)),
+                    TermEvent::Resize(c, r) => InputEv::Resize(c, r),
+                    _ => continue,
+                };
+                if tx.send(msg).is_err() {
+                    break;
+                }
+            }
+        })
+        .ok();
+    (rx, handle)
+}

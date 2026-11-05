@@ -4,14 +4,13 @@
 //! KohakuTUI - terminal UI engine driven from Python through a retained node-tree protocol
 //!
 //! Modules, in data-flow order:
-//! - proto: Ops (down), Events (up), the dynamic value type and wire framing
+//! - proto: Ops (down), Events (up) and the dynamic value type they carry
+//! - text: Markdown rendering, streaming hold-back, width-aware wrapping, theme
+//! - widgets: the component trait, the registry and every component
 //! - model: the retained document (regions, nodes, seal and flush state)
-//! - text: Markdown rendering, streaming hold-back, width-aware wrapping
-//! - widgets: the component registry and every component
-//! - view: focus, key routing, overlays, layout, theme
+//! - view: scrollback flushing, frame layout, key routing
 //! - term: TTY ownership, inline viewport, history insertion, alternate screen
-//! - runtime: the render thread, input thread and stdio capture
-//! - transport: the Bus, framed streams, Host and Viewer
+//! - runtime: the engine and input threads and the `Session` handle
 //!
 //! With the `python` feature this crate builds the `kohakutui._rs` extension module.
 
@@ -20,7 +19,6 @@ pub mod proto;
 pub mod runtime;
 pub mod term;
 pub mod text;
-pub mod transport;
 pub mod view;
 pub mod widgets;
 
@@ -41,6 +39,7 @@ mod py {
     fn _rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m.add_function(wrap_pyfunction!(version, m)?)?;
         m.add("PROTOCOL", crate::proto::PROTOCOL)?;
+        crate::runtime::python::register(m)?;
         Ok(())
     }
 }

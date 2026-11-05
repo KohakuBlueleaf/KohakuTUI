@@ -1,0 +1,262 @@
+//! Opening the terminal, sizing the inline viewport, drawing frames and switching modes.
+
+use std::io::{self, IsTerminal, Write};
+
+use crossterm::cursor::{Hide, MoveTo, Show};
+use crossterm::queue;
+use crossterm::terminal::{self, Clear, ClearType};
+use ratatui::backend::{Backend as _, CrosstermBackend};
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+
+use super::guard::{mark_active, restore_bytes};
+use super::out::TtyOut;
+use super::{Backend, History, Out, Term, TermError};
+
+impl Term {
+    /// Opens the terminal for `backend`, takes raw mode and anchors the viewport at the cursor.
+    pub fn open(backend: &Backend) -> Result<Term, TermError> {
+        match backend {
+            Backend::Test(screen) => {
+                let (cols, rows) = screen.size();
+                let (row, col) = screen.cursor();
+                let mut term = Term::with(Out::Test(screen.clone()), cols, rows, History::detect());
+                term.anchor(row, col)?;
+                Ok(term)
+            }
+            Backend::Plain => Ok(Term::plain()),
+            Backend::Auto => Term::tty().or_else(|_| Ok(Term::plain())),
+            Backend::Tty => Term::tty(),
+        }
+    }
+
+    fn with(out: Out, cols: u16, rows: u16, history: History) -> Term {
+        Term {
+            out,
+            cols,
+            rows,
+            vt: 0,
+            vh: 0,
+            prev: None,
+            fullscreen: false,
+            saved_vt: 0,
+            history,
+            raw: false,
+        }
+    }
+
+    fn plain() -> Term {
+        let cols = std::env::var("COLUMNS")
+            .ok()
+            .and_then(|c| c.parse().ok())
+            .unwrap_or(100);
+        Term::with(Out::Plain(io::stdout()), cols, 24, History::Reprint)
+    }
+
+    fn tty() -> Result<Term, TermError> {
+        let out = TtyOut::open().map_err(|e| TermError::NoTty(e.to_string()))?;
+        let (cols, rows) = terminal::size().map_err(|e| TermError::NoTty(e.to_string()))?;
+        terminal::enable_raw_mode().map_err(|e| TermError::NoTty(e.to_string()))?;
+
+        let mut term = Term::with(Out::Tty(out), cols, rows, History::detect());
+        term.raw = true;
+        mark_active(true);
+        if cfg!(unix) {
+            write!(term.out, "\x1b[?2004h")?;
+        }
+
+        // crossterm asks the cursor row through stdout on Unix: only safe when stdout is the tty
+        let pos = if cfg!(windows) || io::stdout().is_terminal() {
+            crossterm::cursor::position().ok()
+        } else {
+            None
+        };
+        let (col, row) = pos.unwrap_or((0, rows.saturating_sub(1)));
+        term.anchor(row, col)?;
+        Ok(term)
+    }
+
+    /// Starts the viewport at the cursor row, on a fresh line if the cursor is mid-line.
+    fn anchor(&mut self, row: u16, col: u16) -> io::Result<()> {
+        self.vt = row.min(self.rows.saturating_sub(1));
+        if col > 0 {
+            write!(self.out, "\r\n")?;
+            self.vt = (self.vt + 1).min(self.rows.saturating_sub(1));
+        }
+        Ok(())
+    }
+
+    pub fn is_plain(&self) -> bool {
+        matches!(self.out, Out::Plain(_))
+    }
+
+    pub fn is_tty(&self) -> bool {
+        matches!(self.out, Out::Tty(_))
+    }
+
+    /// (cols, rows).
+    pub fn size(&self) -> (u16, u16) {
+        (self.cols, self.rows)
+    }
+
+    /// The screen rows the frame occupies.
+    pub fn area(&self) -> Rect {
+        Rect::new(0, self.vt, self.cols, self.vh)
+    }
+
+    pub fn resize(&mut self, cols: u16, rows: u16) -> io::Result<()> {
+        if self.is_plain() {
+            self.cols = cols;
+            return Ok(());
+        }
+        self.cols = cols.max(8);
+        self.rows = rows.max(3);
+        self.vt = self.vt.min(self.rows.saturating_sub(1));
+        if self.fullscreen {
+            self.vt = 0;
+            self.vh = self.rows;
+            queue!(self.out, MoveTo(0, 0), Clear(ClearType::All))?;
+        } else {
+            queue!(self.out, MoveTo(0, self.vt), Clear(ClearType::FromCursorDown))?;
+            self.vh = 0;
+        }
+        self.prev = None;
+        Ok(())
+    }
+
+    /// Starts a frame: the terminal shows nothing until `end_frame` (synchronized output).
+    pub fn begin_frame(&mut self) -> io::Result<()> {
+        if !self.is_plain() {
+            write!(self.out, "\x1b[?2026h")?;
+        }
+        Ok(())
+    }
+
+    pub fn end_frame(&mut self) -> io::Result<()> {
+        if !self.is_plain() {
+            write!(self.out, "\x1b[?2026l")?;
+        }
+        self.out.flush()
+    }
+
+    /// Sizes the inline viewport to `h` rows, scrolling the screen up when it would not fit.
+    pub fn set_viewport(&mut self, h: u16) -> io::Result<()> {
+        if self.is_plain() {
+            return Ok(());
+        }
+        if self.fullscreen {
+            if self.vh != self.rows || self.vt != 0 {
+                self.vt = 0;
+                self.vh = self.rows;
+                self.prev = None;
+            }
+            return Ok(());
+        }
+
+        let h = h.min(self.rows);
+        let mut moved = false;
+        if self.vt + h > self.rows {
+            let over = self.vt + h - self.rows;
+            queue!(self.out, MoveTo(0, self.rows - 1))?;
+            for _ in 0..over {
+                self.out.write_all(b"\n")?;
+            }
+            self.vt -= over;
+            moved = true;
+        }
+        if moved || h != self.vh || self.prev.is_none() {
+            queue!(self.out, MoveTo(0, self.vt), Clear(ClearType::FromCursorDown))?;
+            self.prev = None;
+        }
+        self.vh = h;
+        Ok(())
+    }
+
+    /// Draws `buf` (whose area is `self.area()`) by diffing against the last frame.
+    pub fn draw(&mut self, buf: &Buffer, cursor: Option<(u16, u16)>) -> io::Result<()> {
+        if self.is_plain() {
+            return Ok(());
+        }
+        let area = self.area();
+        let prev = match self.prev.take() {
+            Some(p) if p.area == area => p,
+            _ => Buffer::empty(area),
+        };
+
+        {
+            let mut backend = CrosstermBackend::new(&mut self.out);
+            backend.draw(prev.diff(buf).into_iter())?;
+        }
+        match cursor {
+            Some((x, y)) => queue!(self.out, MoveTo(x, y), Show)?,
+            None => queue!(self.out, Hide)?,
+        }
+        self.prev = Some(buf.clone());
+        Ok(())
+    }
+
+    pub fn enter_fullscreen(&mut self) -> io::Result<()> {
+        if self.fullscreen || self.is_plain() {
+            return Ok(());
+        }
+        self.saved_vt = self.vt;
+        write!(self.out, "\x1b[?1049h")?;
+        queue!(self.out, MoveTo(0, 0), Clear(ClearType::All))?;
+        self.fullscreen = true;
+        self.vt = 0;
+        self.vh = self.rows;
+        self.prev = None;
+        Ok(())
+    }
+
+    /// Back to the main screen; the old viewport position is not trusted (it may have reflowed),
+    /// so the viewport is cleared from there down and redrawn.
+    pub fn leave_fullscreen(&mut self) -> io::Result<()> {
+        if !self.fullscreen {
+            return Ok(());
+        }
+        write!(self.out, "\x1b[?1049l")?;
+        self.fullscreen = false;
+        self.vt = self.saved_vt.min(self.rows.saturating_sub(1));
+        self.vh = 0;
+        queue!(self.out, MoveTo(0, self.vt), Clear(ClearType::FromCursorDown))?;
+        self.prev = None;
+        Ok(())
+    }
+
+    pub fn is_fullscreen(&self) -> bool {
+        self.fullscreen
+    }
+
+    pub fn bell(&mut self) -> io::Result<()> {
+        if !self.is_plain() {
+            write!(self.out, "\x07")?;
+        }
+        Ok(())
+    }
+
+    /// Clears the viewport, leaves the cursor where it started and restores the terminal.
+    pub fn close(&mut self) -> io::Result<()> {
+        if self.is_plain() {
+            return self.out.flush();
+        }
+        self.leave_fullscreen()?;
+        queue!(self.out, MoveTo(0, self.vt), Clear(ClearType::FromCursorDown), Show)?;
+        self.out.write_all(restore_bytes())?;
+        self.out.flush()?;
+        if self.raw {
+            terminal::disable_raw_mode()?;
+            self.raw = false;
+            mark_active(false);
+        }
+        Ok(())
+    }
+}
+
+impl Drop for Term {
+    fn drop(&mut self) {
+        if self.raw {
+            let _ = self.close();
+        }
+    }
+}
