@@ -43,7 +43,11 @@ def chat() -> None:
     ]
     with App() as app:
         app.bottom.add(
-            Composer(placeholder="say something · /model · ctrl+t", commands=COMMANDS)
+            Composer(
+                placeholder="say something · /model · ctrl+t",
+                commands=COMMANDS,
+                boxed=True,
+            )
         )
         footer = app.bottom.add(Footer(left="kohakutui demo", right="model-000"))
         done = threading.Event()
