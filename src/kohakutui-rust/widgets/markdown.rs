@@ -11,7 +11,8 @@ use crate::proto::value::{display, get};
 use crate::proto::Value;
 use crate::text::{MdLine, MdStream};
 
-/// Render cache key: (width, stable_end).
+/// Render cache key: (width, stable_end). `stable_end` only tells appended text apart, so a
+/// new source (same length or not) must drop the cache.
 type Cache = Option<(usize, usize, Vec<MdLine>)>;
 
 #[derive(Debug, Default)]
@@ -48,6 +49,10 @@ impl Markdown {
     pub fn finished(&self) -> bool {
         self.stream.is_finished()
     }
+
+    fn clear_cache(&self) {
+        *self.cache.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
 }
 
 impl Component for Markdown {
@@ -60,6 +65,7 @@ impl Component for Markdown {
         if let Some(src) = get(p, "source") {
             self.stream = MdStream::new();
             self.stream.push(&display(src));
+            self.clear_cache();
         }
         if !self.streaming {
             self.stream.finish();

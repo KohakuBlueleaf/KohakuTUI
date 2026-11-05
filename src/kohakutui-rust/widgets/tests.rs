@@ -806,3 +806,14 @@ fn table_reads_rows_as_arrays_or_maps() {
     assert_eq!(out[2], "a    │ 1 ");
     assert_eq!(out[3], "bb   │ 22");
 }
+
+#[test]
+fn markdown_shows_a_new_source_of_the_same_length() {
+    // the render cache is keyed by width and source length: drawn, then replaced by an
+    // equally long source, it must draw the new text (a state value 3 -> 5 in a sentence)
+    let mut md = build("markdown", &map(vec![("source", "will start 3 workers".into())])).unwrap();
+    assert_eq!(texts(md.as_ref(), 40), vec!["will start 3 workers"]);
+    md.update(&map(vec![("source", "will start 5 workers".into())]))
+        .unwrap();
+    assert_eq!(texts(md.as_ref(), 40), vec!["will start 5 workers"]);
+}
