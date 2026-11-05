@@ -32,7 +32,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo clippy --all-targets --features python,highlight,testing -- -D warnings
+      - run: cargo clippy --all-targets --features python -- -D warnings
       # Without the python feature the test binary links nothing of Python
       - run: cargo test --no-default-features
       - name: One crossterm in the dependency graph
@@ -55,13 +55,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - uses: astral-sh/setup-uv@v6
-      # The testing feature adds _Session.inject for scenario tests; release wheels leave it out
       - name: Build the wheel
         shell: bash
         run: |
           uv venv
           uv pip install maturin
-          uv run --no-project maturin build --release --features python,highlight,testing --out dist
+          uv run --no-project maturin build --release --out dist
       - name: Install the built wheel
         shell: bash
         run: |

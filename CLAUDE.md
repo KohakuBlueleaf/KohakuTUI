@@ -39,7 +39,7 @@ plans/                local design and working plans (gitignored)
 6. `//!` docs at the top of every file say what the module is for. `pub(crate)` unless the
    item is part of the crate API.
 7. `cargo fmt` (max width 100) and `cargo clippy --all-targets -- -D warnings`, with and without
-   `--features python,highlight,testing`.
+   `--features python`.
 8. Code adapted from Codex (Apache-2.0) or ratatui (MIT) keeps its license header.
 
 ## Python rules
@@ -69,6 +69,12 @@ Comment, code and docstring all say **what**. *How* and *why* live in `docs/` an
 2. A comment says what the code itself cannot say clearly.
 3. A docstring says what the class or function is *for*, so a reader can place it.
 4. Soft limits: inline comment blocks ≤ 2 lines, docstrings ≤ 14 lines.
+5. Doc comments (`//!`, `///`, docstrings) say what a file, type or function is for. An inline
+   comment (1–2 lines) heads a logic block only when the code cannot say what it does (a tricky
+   API, a non-obvious algorithm step).
+6. Separate logic blocks inside a function with one blank line.
+7. Formatting is the formatter's: rustfmt for Rust, black for Python (black already wraps long
+   expressions in parentheses).
 
 ## Tests
 

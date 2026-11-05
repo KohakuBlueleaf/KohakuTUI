@@ -25,7 +25,8 @@ def test_protocol_is_major_minor_ints():
     assert all(isinstance(v, int) for v in kohakutui.PROTOCOL)
 
 
-def test_public_api_is_exactly_declared():
-    assert set(kohakutui.__all__) == {"PROTOCOL", "version"}
+def test_public_api_resolves_and_reexports_the_extension():
     for name in kohakutui.__all__:
+        assert hasattr(kohakutui, name), name
+    for name in ("PROTOCOL", "version", "reset_terminal"):
         assert getattr(kohakutui, name) is getattr(kohakutui._rs, name)

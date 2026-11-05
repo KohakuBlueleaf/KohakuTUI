@@ -4,18 +4,59 @@ A terminal UI engine written in Rust (ratatui + crossterm) and driven from Pytho
 
 Python describes *what* is on screen as a tree of nodes. Rust owns the terminal, the frame loop
 and every keystroke, so streaming output never flickers or reflows, and typing stays smooth
-while Python is busy. The same Python API runs with the engine in-process, in a subprocess, or
-on another machine you attach to.
+while Python is busy.
 
 > Status: **early development.** The API is not stable yet.
 
 ## What it is for
 
 - **Agent front ends.** An inline mode where finished output goes to the terminal's real
-  scrollback, and a full-screen mode with panels, switchable at runtime. It is the planned
+  scrollback, and a full-screen mode (`ctrl+t`) over the same transcript. It is the planned
   replacement for KohakuTerrarium's `cli_rich` and Textual front ends.
-- **Training scripts.** Progress, loss curves and logs that a stray `print` cannot corrupt, and a
-  dashboard you can attach to from your laptop while the job runs on a cluster.
+- **Training scripts.** Progress, loss curves and logs that a stray `print` cannot corrupt.
+
+## Try it
+
+```bash
+python -m kohakutui demo chat    # streamed Markdown, a composer, /model picker, ctrl+t
+python -m kohakutui demo train   # progress, a loss sparkline, captured print output
+python -m kohakutui reset        # fix a terminal left in raw mode
+```
+
+## Using it
+
+```python
+import kohakutui as kt
+
+with kt.App() as app:
+    composer = app.bottom.add(kt.Composer(placeholder="say something"))
+
+    @app.on("submit", composer)
+    def reply(ev):
+        cell = app.transcript.add(kt.Cell(role="assistant", stream_flush=True))
+        body = cell.add(kt.Markdown(streaming=True))
+        for token in ["**Hello** ", "from ", "Rust\n"]:
+            body.append(token)
+        cell.seal()  # the whole cell is now in the terminal's scrollback
+
+    model = app.choose("Model", ["gpt", "claude", "gemini"])  # blocks until answered
+```
+
+The screen has five regions, each a node you add children to:
+
+| Region | Inline mode | Full-screen mode |
+| ------ | ----------- | ---------------- |
+| `app.transcript` | sealed cells go to real scrollback | scrollable main pane |
+| `app.live` | spinners, progress, running tools | under the main pane |
+| `app.bottom` | composer and footer | bottom |
+| `app.panels` | hidden | right-hand pane |
+| `app.overlays` | dialogs (`choose`, `ask`, `confirm`, `card`) | centered modal |
+
+Nodes change with `update(**props)`, stream with `append(data)`, finish with `seal()`, and move
+with `move(parent)`. Events arrive through `@app.on(kind, node)`, `app.events()`,
+`async for ev in app.aevents()`, or a `kt.Widget` subclass that owns its nodes. Everything runs
+headless with `App(backend="test", size=(80, 24))`, whose `screen()` and `history()` read the
+emulated terminal.
 
 ## Development setup
 
@@ -35,7 +76,7 @@ Checks:
 ```bash
 pytest tests/ -q
 cargo test --no-default-features
-cargo fmt --check && cargo clippy --all-targets --features python,highlight,testing -- -D warnings
+cargo fmt --check && cargo clippy --all-targets --features python -- -D warnings
 black --check src/ tests/ && ruff check src/ tests/
 ```
 
