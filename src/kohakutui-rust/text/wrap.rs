@@ -21,6 +21,8 @@ struct Atom {
     pieces: Vec<(String, Style)>,
     width: usize,
     space: bool,
+    /// One wide (CJK) grapheme: a line may break on either side of it.
+    wide: bool,
 }
 
 fn atoms(spans: &[Span<'_>]) -> Vec<Atom> {
@@ -30,13 +32,10 @@ fn atoms(spans: &[Span<'_>]) -> Vec<Atom> {
         for g in span.content.graphemes(true) {
             let w = display_width(g);
             let space = g.chars().all(char::is_whitespace);
-            let standalone = w > 1;
-            let joins = match out.last() {
-                Some(last) => {
-                    last.space == space && !standalone && !(last.width > 0 && is_wide(last))
-                }
-                None => false,
-            };
+            let wide = w > 1;
+            let joins = out
+                .last()
+                .is_some_and(|last| last.space == space && !wide && !last.wide);
             if joins {
                 let last = out.last_mut().unwrap();
                 match last.pieces.last_mut() {
@@ -45,15 +44,11 @@ fn atoms(spans: &[Span<'_>]) -> Vec<Atom> {
                 }
                 last.width += w;
             } else {
-                out.push(Atom { pieces: vec![(g.to_owned(), style)], width: w, space });
+                out.push(Atom { pieces: vec![(g.to_owned(), style)], width: w, space, wide });
             }
         }
     }
     out
-}
-
-fn is_wide(atom: &Atom) -> bool {
-    atom.pieces.len() == 1 && display_width(&atom.pieces[0].0) > 1
 }
 
 #[derive(Default)]

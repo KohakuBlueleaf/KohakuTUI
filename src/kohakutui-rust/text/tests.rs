@@ -61,6 +61,17 @@ fn wrap_breaks_at_spaces_and_trims_the_break() {
 }
 
 #[test]
+fn wrap_never_splits_a_word_that_fits_on_the_next_line() {
+    let lines = wrap_text("aaaa bbbbbbbb cc", Style::default(), 10);
+    let out: Vec<_> = lines.iter().map(plain).collect();
+    assert_eq!(out, vec!["aaaa", "bbbbbbbb", "cc"]);
+
+    let mixed = wrap_text("中文 English words", Style::default(), 9);
+    let out: Vec<_> = mixed.iter().map(plain).collect();
+    assert_eq!(out, vec!["中文", "English", "words"]);
+}
+
+#[test]
 fn wrap_splits_cjk_anywhere_and_never_exceeds_width() {
     let text = "這是一段很長的中文句子需要換行";
     for width in [3, 4, 7, 10] {
@@ -141,6 +152,19 @@ fn stream_holds_back_the_partial_line_and_a_table_until_it_ends() {
     assert_eq!(s.stable_end(), "hello world\n".len());
     s.push("| 1 | 2 |\n\nafter\n");
     assert_eq!(s.stable_end(), s.source().len());
+}
+
+#[test]
+fn the_open_tail_keeps_the_blank_line_before_it() {
+    let mut s = MdStream::new();
+    s.push("first paragraph\n\nsecond par");
+    let tail: Vec<String> = s.pending_lines(40).iter().map(plain).collect();
+    assert_eq!(tail, vec!["", "second par"]);
+
+    let mut code = MdStream::new();
+    code.push("```\na\n\nb");
+    let tail: Vec<String> = code.pending_lines(40).iter().map(plain).collect();
+    assert_eq!(tail, vec!["b"], "a blank code line is already a stable code line");
 }
 
 #[test]

@@ -88,12 +88,20 @@ impl MdStream {
         render(&self.src[..self.stable_end], width)
     }
 
-    /// The unstable tail rendered as plain wrapped text.
+    /// The unstable tail rendered as plain wrapped text. When the stable part ends in a blank
+    /// line outside a code fence, the tail starts with the blank line its block will get.
     pub fn pending_lines(&self, width: usize) -> Vec<Line<'static>> {
         let tail = self.src[self.stable_end..].trim_end_matches('\n');
         if tail.trim().is_empty() {
             return Vec::new();
         }
-        wrap_text(tail, Style::default(), width.max(1))
+
+        let stable = &self.src[..self.stable_end];
+        let mut out = Vec::new();
+        if !self.in_fence && stable.ends_with("\n\n") && !stable.trim().is_empty() {
+            out.push(Line::default());
+        }
+        out.extend(wrap_text(tail, Style::default(), width.max(1)));
+        out
     }
 }
