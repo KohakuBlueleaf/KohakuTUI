@@ -1,0 +1,60 @@
+name: Nightly
+
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+    inputs:
+      force_rebuild:
+        description: Build even if this commit already has nightly artifacts
+        type: boolean
+        default: false
+
+# Like KohakuVault and KohakuTerrarium: nightly only decides; release.yml owns every build and
+# upload, so there is one matrix and one PyPI trusted publisher.
+concurrency:
+  group: nightly-dispatch
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Require green CI, skip a commit already published
+        id: gate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FORCE: ${{ inputs.force_rebuild || false }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha=$(git rev-parse HEAD)
+          result=$(gh run list --workflow ci.yml --commit "$sha" --event push --limit 1 --json conclusion --jq '.[0].conclusion // "missing"')
+          if [ "$result" != success ]; then
+            echo "::error::CI for $sha is $result; nightly not dispatched"
+            exit 1
+          fi
+          previous=$(gh release list --limit 100 --json tagName --jq '[.[] | select(.tagName | startswith("nightly-"))][0].tagName // ""')
+          if [ -n "$previous" ] && [ "$FORCE" != true ]; then
+            body=$(gh release view "$previous" --json body --jq .body)
+            if printf '%s' "$body" | grep -Fq "Source commit: $sha"; then
+              echo "Commit $sha already published" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      - name: Dispatch the release builder (nightly channel)
+        if: steps.gate.outputs.sha != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SOURCE_SHA: ${{ steps.gate.outputs.sha }}
+        run: |
+          gh workflow run release.yml --ref main -f ref="$SOURCE_SHA" -f channel=nightly
+          echo "Dispatched nightly for $SOURCE_SHA." >> "$GITHUB_STEP_SUMMARY"

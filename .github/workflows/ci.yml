@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   lint:
@@ -15,8 +20,8 @@ jobs:
         with:
           python-version: "3.13"
       - run: pip install ruff black
-      - run: ruff check src/ tests/
-      - run: black --check src/ tests/
+      - run: ruff check src/ tests/ scripts/
+      - run: black --check src/ tests/ scripts/
 
   rust:
     name: Rust (fmt, clippy, stage tests)
@@ -46,7 +51,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        python-version: ["3.10", "3.13"]
+        python-version: ["3.10", "3.14"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
