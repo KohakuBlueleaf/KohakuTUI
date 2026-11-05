@@ -1,6 +1,7 @@
 //! Text stage: width-aware wrapping, Markdown to styled lines, and the streaming collector that
 //! decides which source prefix renders the same from now on (design §6.4, §6.6).
 
+pub mod link;
 mod markdown;
 mod stream;
 #[cfg(test)]

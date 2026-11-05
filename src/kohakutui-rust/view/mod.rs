@@ -20,7 +20,7 @@ use crate::proto::{Level, Mode, NodeId};
 pub use chord::Chord;
 pub use flush::{flush_all, take_flushable};
 pub use input::{handle_input, handle_mouse, Outcome};
-pub use layout::{fullscreen, inline, Screen};
+pub use layout::{fullscreen, inline, input_target, link_hits, Screen};
 
 /// A transient notice shown above the bottom region.
 #[derive(Debug, Clone)]
@@ -52,6 +52,8 @@ pub struct ViewState {
     pub(crate) hits: Vec<(u16, u16, NodeId)>,
     /// Scroll boxes on the last full-screen frame: (first row, height, node).
     pub(crate) scroll_hits: Vec<(u16, u16, NodeId)>,
+    /// Full screen: where linked cells were drawn, as (row, first col, end col, link id).
+    pub(crate) link_hits: Vec<(u16, u16, u16, u32)>,
     /// Every foldable header of the transcript in order, for keyboard navigation.
     pub(crate) heads: Vec<NodeId>,
     /// The header under the mouse pointer (full screen).
@@ -121,6 +123,7 @@ impl ViewState {
             seen_top: None,
             hits: Vec::new(),
             scroll_hits: Vec::new(),
+            link_hits: Vec::new(),
             heads: Vec::new(),
             hover: None,
             nav: None,

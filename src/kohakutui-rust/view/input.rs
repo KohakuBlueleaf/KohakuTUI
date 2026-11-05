@@ -8,7 +8,7 @@ use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEventKind};
 
 use super::layout::{input_target, page_input};
 use super::{Selection, ViewState};
-use crate::model::{Model, BOTTOM, LIVE, PANELS};
+use crate::model::{Model, BOTTOM, LIVE, PANELS, TRANSCRIPT};
 use crate::proto::{Event, Mode, NodeId};
 use crate::widgets::{Emit, Input, Mouse, MouseAct};
 
@@ -129,6 +129,17 @@ pub fn handle_input(
     {
         vs.overlay_blur = None;
         return Outcome::Redraw;
+    }
+
+    // esc on a control in the transcript (a form in a reply) gives the keys back to the input
+    if code == KeyCode::Esc && top.is_none() {
+        if let Some(t) = target.filter(|t| m.region_of(*t) == Some(TRANSCRIPT)) {
+            let back = m.subtree(BOTTOM).into_iter().find(|id| {
+                *id != t && m.node(*id).is_some_and(|n| !n.sealed && n.comp.focusable())
+            });
+            vs.focus = back;
+            return Outcome::Redraw;
+        }
     }
 
     // a bare esc with no dialog is the application's (e.g. interrupt the running turn)
@@ -258,8 +269,15 @@ pub fn handle_mouse(
                 return false;
             };
             if sel.anchor == sel.head {
-                // a plain click: nothing selected
+                // a plain click: nothing selected; on a link it reports the URL
                 vs.selection = None;
+                let hit = vs
+                    .link_hits
+                    .iter()
+                    .find(|(y, x0, x1, _)| *y == row && (*x0..*x1).contains(&col));
+                if let Some(url) = hit.and_then(|h| crate::text::link::url(h.3)) {
+                    events.push(Event::Link { url });
+                }
                 return false;
             }
             sel.head = (col, row);
@@ -377,12 +395,14 @@ fn builtin(m: &Model, vs: &mut ViewState, code: KeyCode) -> Outcome {
     Outcome::Redraw
 }
 
-/// Every open focusable node outside the transcript, in layout order.
+/// Every open focusable node in layout order: controls in open transcript cells (forms in a
+/// reply that is still live), then the live, panel and bottom regions.
 fn focusable(m: &Model) -> Vec<NodeId> {
-    [LIVE, PANELS, BOTTOM]
+    [TRANSCRIPT, LIVE, PANELS, BOTTOM]
         .into_iter()
         .flat_map(|r| m.subtree(r))
         .filter(|id| m.node(*id).is_some_and(|n| !n.sealed && n.comp.focusable()))
+        .filter(|id| !m.ancestors_sealed(*id) && !m.hidden(*id))
         .collect()
 }
 

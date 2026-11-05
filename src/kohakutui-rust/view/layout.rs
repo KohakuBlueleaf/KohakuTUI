@@ -29,7 +29,7 @@ pub struct Screen {
 
 /// The node that receives keys: the top overlay (unless the user typed away from it), else a
 /// valid focus, else the first input.
-pub(crate) fn input_target(m: &Model, vs: &ViewState) -> Option<NodeId> {
+pub fn input_target(m: &Model, vs: &ViewState) -> Option<NodeId> {
     let top = m.top_overlay();
     if let Some(top) = top.filter(|t| vs.overlay_blur != Some(*t)) {
         return Some(top);
@@ -37,22 +37,22 @@ pub(crate) fn input_target(m: &Model, vs: &ViewState) -> Option<NodeId> {
     page_input(m, vs).or(top)
 }
 
-/// The input outside the overlays that keys go to: a valid focus, else the first input.
+/// The input outside the overlays that keys go to: a valid focus (a control in an open
+/// transcript cell counts once focused), else the first input outside the transcript.
 pub(crate) fn page_input(m: &Model, vs: &ViewState) -> Option<NodeId> {
-    let usable = |id: NodeId| {
-        m.node(id).is_some_and(|n| {
-            !n.sealed
-                && n.comp.focusable()
-                && !matches!(m.region_of(id), Some(TRANSCRIPT) | Some(OVERLAYS))
-        })
+    let open = |id: NodeId| {
+        m.node(id).is_some_and(|n| !n.sealed && n.comp.focusable())
+            && m.region_of(id) != Some(OVERLAYS)
+            && !m.ancestors_sealed(id)
+            && !m.hidden(id)
     };
-    if let Some(f) = vs.focus.filter(|f| usable(*f)) {
+    if let Some(f) = vs.focus.filter(|f| open(*f)) {
         return Some(f);
     }
     [BOTTOM, LIVE, PANELS]
         .into_iter()
         .flat_map(|r| m.subtree(r))
-        .find(|id| usable(*id))
+        .find(|id| open(*id))
 }
 
 fn toast_lines(vs: &ViewState, width: u16) -> Vec<Line<'static>> {
@@ -531,4 +531,26 @@ fn modal(
         .filter(|(r, _)| *r < inner.height)
         .map(|(r, c)| (inner.x + c, inner.y + r));
     (cursor, inner)
+}
+
+/// Runs of linked cells in a drawn frame, as (row, first col, end col, link id), so a click in
+/// full screen can find the URL under it.
+pub fn link_hits(buf: &Buffer) -> Vec<(u16, u16, u16, u32)> {
+    let area = buf.area;
+    let mut hits = Vec::new();
+    for y in area.top()..area.bottom() {
+        let mut run: Option<(u16, u32)> = None;
+        for x in area.left()..=area.right() {
+            let id = (x < area.right())
+                .then(|| crate::text::link::id_of(Some(buf[(x, y)].underline_color)))
+                .flatten();
+            if run.map(|(_, r)| Some(r)) != Some(id) {
+                if let Some((start, r)) = run.take() {
+                    hits.push((y, start, x, r));
+                }
+                run = id.map(|i| (x, i));
+            }
+        }
+    }
+    hits
 }

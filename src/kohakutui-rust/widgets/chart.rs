@@ -181,9 +181,28 @@ impl Chart {
             return out;
         }
         if n <= dots {
+            // fewer points than columns: each lands on its column and neighbours are joined by
+            // a straight line, so a short series reads as a curve, not scattered dots
+            let x_of = |i: usize| if n == 1 { 0 } else { i * (dots - 1) / (n - 1) };
+            for (i, pair) in values.windows(2).enumerate() {
+                let (a, b) = (pair[0], pair[1]);
+                if !(a.is_finite() && b.is_finite()) {
+                    continue;
+                }
+                let (x0, x1) = (x_of(i), x_of(i + 1));
+                for (x, slot) in out.iter_mut().enumerate().take(x1 + 1).skip(x0) {
+                    let t = if x1 == x0 {
+                        0.0
+                    } else {
+                        (x - x0) as f64 / (x1 - x0) as f64
+                    };
+                    *slot = Some(a + (b - a) * t);
+                }
+            }
             for (i, v) in values.iter().enumerate() {
-                let x = if n == 1 { 0 } else { i * (dots - 1) / (n - 1) };
-                out[x] = v.is_finite().then_some(*v);
+                if v.is_finite() {
+                    out[x_of(i)] = Some(*v);
+                }
             }
             return out;
         }

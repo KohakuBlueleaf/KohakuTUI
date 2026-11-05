@@ -3,6 +3,7 @@
 //! A component renders itself as lines at a width and handles the keys sent to it while focused.
 //! Containers (`stack`, `cell`) render only their own header; the view lays out their children.
 
+mod bars;
 mod button;
 mod cell;
 mod chart;
@@ -10,6 +11,7 @@ mod composer;
 mod data;
 mod dialogs;
 mod editor;
+mod field;
 mod layout;
 mod markdown;
 mod picker;
@@ -30,6 +32,7 @@ use thiserror::Error;
 
 use crate::proto::Value;
 
+pub use bars::Bars;
 pub use button::Button;
 pub use cell::{fold_marker, Cell, Role};
 pub use chart::Chart;
@@ -37,7 +40,8 @@ pub use composer::Composer;
 pub use data::{Footer, Kv, Table};
 pub use dialogs::{Card, Confirm, Prompt};
 pub use editor::TextEditor;
-pub use layout::{Divider, Stack};
+pub use field::Field;
+pub use layout::{Columns, Divider, Stack, Tabs};
 pub use markdown::Markdown;
 pub use picker::Picker;
 pub use registry::{build, KINDS};
@@ -48,6 +52,8 @@ pub use text::{Code, Log, Text};
 /// What a component sees while rendering.
 #[derive(Debug, Clone, Copy)]
 pub struct Ctx {
+    /// The node that has the keys, so a control deep in a transcript cell can draw as focused.
+    pub focus: Option<crate::proto::NodeId>,
     pub now: Instant,
     /// When the engine started; animation frames count from here.
     pub epoch: Instant,
@@ -58,11 +64,15 @@ pub struct Ctx {
 
 impl Ctx {
     pub fn new(now: Instant, epoch: Instant) -> Self {
-        Ctx { now, epoch, focused: false, expand_all: false }
+        Ctx { focus: None, now, epoch, focused: false, expand_all: false }
     }
 
     pub fn focused(self, focused: bool) -> Self {
         Ctx { focused, ..self }
+    }
+
+    pub fn with_focus(self, focus: Option<crate::proto::NodeId>) -> Self {
+        Ctx { focus, ..self }
     }
 
     pub fn expanded(self, expand_all: bool) -> Self {
@@ -167,6 +177,14 @@ pub trait Component: Send + Any {
     /// The rows `frame_children` keeps out of `total` child lines: (start, end).
     fn window(&self, total: usize) -> (usize, usize) {
         (0, total)
+    }
+    /// A container whose children sit side by side: (children per row, gap columns).
+    fn side_by_side(&self) -> Option<(usize, usize)> {
+        None
+    }
+    /// Whether the child at `index` is drawn (`tabs` shows one pane).
+    fn shows_child(&self, _index: usize) -> bool {
+        true
     }
     /// A container's chance to window or decorate its children's lines (`scroll` clips them).
     fn frame_children(&self, children: Vec<Line<'static>>, _width: u16) -> Vec<Line<'static>> {

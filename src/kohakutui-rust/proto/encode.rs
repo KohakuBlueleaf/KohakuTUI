@@ -78,6 +78,10 @@ impl Op {
                 ("ttl_ms", (*ttl_ms).into()),
             ]),
             Op::Bell => map(vec![("op", "bell".into())]),
+            Op::Copy { text } => map(vec![("op", "copy".into()), ("text", text.as_str().into())]),
+            Op::SetLinks { osc8 } => {
+                map(vec![("op", "set_links".into()), ("osc8", (*osc8).into())])
+            }
             Op::SetTheme { scheme, overrides, truecolor } => map(vec![
                 ("op", "set_theme".into()),
                 ("scheme", scheme.as_str().into()),
@@ -147,6 +151,7 @@ impl Event {
             Event::Copy { text } => {
                 map(vec![("ev", "copy".into()), ("text", text.as_str().into())])
             }
+            Event::Link { url } => map(vec![("ev", "link".into()), ("url", url.as_str().into())]),
             Event::Error { id, message } => map(vec![
                 ("ev", "error".into()),
                 ("id", id.map_or(Value::Nil, Value::from)),

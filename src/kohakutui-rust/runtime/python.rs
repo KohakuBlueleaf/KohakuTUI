@@ -51,14 +51,20 @@ impl PySession {
 #[pymethods]
 impl PySession {
     #[new]
-    #[pyo3(signature = (backend="auto", mode="inline", size=None, interrupt="event", max_fps=60))]
+    #[pyo3(signature = (backend="auto", mode="inline", size=None, interrupt="event", max_fps=60, links="auto"))]
     fn new(
         backend: &str,
         mode: &str,
         size: Option<(u16, u16)>,
         interrupt: &str,
         max_fps: u32,
+        links: &str,
     ) -> PyResult<Self> {
+        let links = match links {
+            "auto" | "osc8" => true,
+            "text" => false,
+            other => return Err(PyValueError::new_err(format!("unknown links {other:?}"))),
+        };
         let screen = (backend == "test").then(|| {
             let (cols, rows) = size.unwrap_or((80, 24));
             TestScreen::new(cols, rows)
@@ -77,7 +83,7 @@ impl PySession {
             "exit" => Interrupt::Exit,
             other => return Err(PyValueError::new_err(format!("unknown interrupt {other:?}"))),
         };
-        let cfg = Config { backend, mode, interrupt, max_fps };
+        let cfg = Config { backend, mode, interrupt, max_fps, links };
         Ok(PySession { cfg: Mutex::new(Some(cfg)), session: Mutex::new(None), screen })
     }
 
@@ -239,8 +245,13 @@ fn parse_inject(ev: &Bound<'_, PyDict>) -> PyResult<Vec<InputEv>> {
     }
     if let Some(c) = ev.get_item("click")? {
         let (col, row): (u16, u16) = c.extract()?;
-        let kind = MouseEventKind::Down(MouseButton::Left);
-        return Ok(vec![InputEv::Mouse { kind, col, row }]);
+        // a whole click: press then release where it was pressed (links act on the release)
+        let down = MouseEventKind::Down(MouseButton::Left);
+        let up = MouseEventKind::Up(MouseButton::Left);
+        return Ok(vec![
+            InputEv::Mouse { kind: down, col, row },
+            InputEv::Mouse { kind: up, col, row },
+        ]);
     }
     if let Some(n) = ev.get_item("scroll")? {
         let n: i32 = n.extract()?;

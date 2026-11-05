@@ -148,6 +148,44 @@ class TestApp:
         t.join(3)
         assert results == {"choose": "beta", "card": "stop"}
 
+    def test_links_show_their_name_and_a_click_in_full_screen_opens_them(
+        self, app: App, monkeypatch
+    ):
+        opened: list[str] = []
+        monkeypatch.setattr(
+            "kohakutui.app.core.webbrowser.open", lambda url: opened.append(url)
+        )
+        src = "Read [the docs](https://a.io/docs) or https://b.io/x. Bad [js](javascript:x)."
+        app.transcript.add(Markdown(source=src))
+        app.transcript.add(Text("project page", link="https://c.io/p"))
+        # the name only (the URL rides as OSC 8); an unsafe scheme stays text with its URL
+        until(app, lambda: any("project page" in line for line in app.screen()))
+        screen = "\n".join(app.screen())
+        assert "Read the docs or https://b.io/x. Bad js (javascript:x)." in screen
+        assert "(https://a.io/docs)" not in screen and "(https://c.io/p)" not in screen
+
+        app.set_mode("fullscreen")
+        clicked: list[str] = []
+        app.on("link")(lambda ev: clicked.append(ev.url))
+        until(app, lambda: any("project page" in line for line in app.screen()))
+        rows = app.screen()
+        for word in ("the docs", "b.io", "project", "Bad", "js"):
+            row = next(y for y, line in enumerate(rows) if word in line)
+            app.inject({"click": (rows[row].index(word) + 1, row)})
+        expected = ["https://a.io/docs", "https://b.io/x", "https://c.io/p"]
+        until(app, lambda: clicked == expected and opened == expected)
+
+    def test_links_are_written_as_text_when_asked(self):
+        with App(backend="test", size=(70, 6), interrupt="event", links="text") as app:
+            app.transcript.add(Markdown(source="Read [the docs](https://a.io/docs)."))
+            app.transcript.add(Text("project page", link="https://c.io/p"))
+            until(app, lambda: any("project page" in line for line in app.screen()))
+            screen = "\n".join(app.screen())
+            assert "Read the docs (https://a.io/docs)." in screen
+            assert "project page (https://c.io/p)" in screen
+        with pytest.raises(ValueError):
+            App(backend="test", links="html")
+
     def test_typing_past_an_open_dialog_reaches_the_input(self, app: App):
         composer = app.bottom.add(Composer())
         sent = []

@@ -42,6 +42,9 @@ pub struct Config {
     pub mode: Mode,
     pub interrupt: Interrupt,
     pub max_fps: u32,
+    /// OSC 8 hyperlinks (true) or links written as "text (url)"; plain output always writes
+    /// them as text.
+    pub links: bool,
 }
 
 impl Default for Config {
@@ -51,6 +54,7 @@ impl Default for Config {
             mode: Mode::Inline,
             interrupt: Interrupt::Event,
             max_fps: 60,
+            links: true,
         }
     }
 }

@@ -59,6 +59,10 @@ class ControlMixin:
     def bell(self) -> None:
         self.send([{"op": "bell"}])
 
+    def copy(self, text: str) -> None:
+        """Puts ``text`` on the system clipboard (OSC 52, on a real terminal) with a notice."""
+        self.send([{"op": "copy", "text": text}])
+
     def print(
         self, *args: Any, sep: str = " ", role: str = "output", tone: str | None = None
     ):
@@ -141,5 +145,6 @@ class ControlMixin:
     def inject(self, *events: dict[str, Any]) -> None:
         """Synthetic input for a ``backend="test"`` app: ``{"text": s}`` types at human pace,
         ``{"burst": s}`` at paste pace, ``{"key": "ctrl+t"}``, ``{"paste": s}``,
-        ``{"resize": (cols, rows)}``."""
+        ``{"resize": (cols, rows)}``, ``{"click": (col, row)}`` (press and release, full
+        screen), ``{"scroll": n}`` (wheel steps, positive is up)."""
         self._session.inject(list(events))

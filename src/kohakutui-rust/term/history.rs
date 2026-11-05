@@ -91,6 +91,7 @@ impl Term {
 pub(crate) fn write_line(w: &mut impl Write, line: &Line<'static>) -> io::Result<()> {
     for span in &line.spans {
         let style = line.style.patch(span.style);
+        let linked = crate::text::link::id_of(style.underline_color);
         queue!(w, SetAttribute(Attribute::Reset), ResetColor)?;
         if let Some(fg) = style.fg {
             queue!(w, SetForegroundColor(fg.into_crossterm()))?;
@@ -111,7 +112,14 @@ pub(crate) fn write_line(w: &mut impl Write, line: &Line<'static>) -> io::Result
                 queue!(w, SetAttribute(a))?;
             }
         }
-        queue!(w, Print(span.content.as_ref()))?;
+        match linked {
+            Some(id) => {
+                let open = crate::text::link::open(id);
+                queue!(w, Print(open), Print(span.content.as_ref()))?;
+                queue!(w, Print(crate::text::link::CLOSE))?;
+            }
+            None => queue!(w, Print(span.content.as_ref()))?,
+        }
     }
     queue!(w, SetAttribute(Attribute::Reset), ResetColor)
 }

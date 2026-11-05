@@ -113,7 +113,8 @@ fn markdown_renders_blocks_with_markers_and_separators() {
     assert_eq!(out[quote - 1], "", "the separator before a quote sits outside it");
     assert!(out.iter().any(|l| l.starts_with("name │ value")), "{out:#?}");
     assert!(out.contains(&"▌ quoted line one".to_owned()), "{out:#?}");
-    assert!(out.iter().any(|l| l.contains("link (https://example.com)")), "{out:#?}");
+    // a link shows its name only: the URL rides on the text as an OSC 8 hyperlink
+    assert!(out.iter().any(|l| l.contains("with a link and trailing")), "{out:#?}");
 }
 
 #[test]
@@ -241,4 +242,70 @@ fn themes_resolve_roles_gems_and_literals_and_reduce_to_256_colours() {
     assert_eq!(custom.color("ok"), Some(Color::Rgb(0, 255, 0)));
     assert_eq!(parse_hex("#abc"), Some(Color::Rgb(0xaa, 0xbb, 0xcc)));
     assert_eq!(parse_hex("#ab"), None);
+}
+
+#[test]
+fn bare_urls_are_found_without_trailing_punctuation_or_unopened_brackets() {
+    use super::link::find_urls;
+    let found = |t: &str| {
+        find_urls(t)
+            .into_iter()
+            .map(|(a, b)| t[a..b].to_owned())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(found("see https://a.io/x."), vec!["https://a.io/x"]);
+    assert_eq!(found("(docs: http://a.io/p?q=1)"), vec!["http://a.io/p?q=1"]);
+    assert_eq!(
+        found("wiki https://en.wikipedia.org/wiki/A_(b)!"),
+        vec!["https://en.wikipedia.org/wiki/A_(b)"]
+    );
+    assert_eq!(found("two: https://a.io, https://b.io"), vec!["https://a.io", "https://b.io"]);
+    assert!(found("xhttps://a.io and https:// and http").is_empty());
+}
+
+#[test]
+fn only_known_schemes_without_control_characters_become_links() {
+    use super::link::{id_of, linkable, mark, url};
+    assert!(linkable("https://a.io") && linkable("mailto:x@y.z") && linkable("file:///tmp/a"));
+    assert!(!linkable("javascript:alert(1)") && !linkable("vscode://x") && !linkable("https://"));
+    assert!(!linkable("https://a.io/\x1b]8;;evil") && !linkable("https://a.io/x y"));
+    // the mark round-trips to the same URL; an unlinkable URL gets no mark
+    let id = id_of(mark("https://a.io/round").underline_color).unwrap();
+    assert_eq!(url(id).as_deref(), Some("https://a.io/round"));
+    assert_eq!(id_of(mark("ftp://a.io").underline_color), None);
+}
+
+#[test]
+fn markdown_links_are_marked_and_their_url_written_only_as_text() {
+    use super::link::{id_of, set_osc8, url};
+    let linked = |lines: &[MdLine]| {
+        lines
+            .iter()
+            .flat_map(|l| l.line.spans.iter())
+            .filter_map(|s| {
+                id_of(s.style.underline_color).map(|id| (s.content.to_string(), url(id).unwrap()))
+            })
+            .collect::<Vec<_>>()
+    };
+    let src = "Read [the docs](https://a.io/docs) or https://b.io/x. Not `https://c.io`.";
+    let lines = render_markdown(src, 80);
+    assert_eq!(texts(&lines), vec!["Read the docs or https://b.io/x. Not https://c.io."]);
+    assert_eq!(
+        linked(&lines),
+        vec![
+            ("the docs".to_owned(), "https://a.io/docs".to_owned()),
+            ("https://b.io/x".to_owned(), "https://b.io/x".to_owned()),
+        ],
+        "code spans stay text"
+    );
+    // a wrapped link keeps its mark on every piece
+    let lines = render_markdown("x [a long link text here](https://a.io/w)", 12);
+    assert!(linked(&lines).len() >= 2 && linked(&lines).iter().all(|(_, u)| u == "https://a.io/w"));
+
+    // written as text (plain output): no marks, the URL follows the name
+    set_osc8(false);
+    let lines = render_markdown("Read [the docs](https://a.io/docs).", 80);
+    set_osc8(true);
+    assert_eq!(texts(&lines), vec!["Read the docs (https://a.io/docs)."]);
+    assert!(linked(&lines).is_empty());
 }

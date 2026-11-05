@@ -120,3 +120,35 @@ fn close_clears_the_viewport_and_keeps_history() {
     assert_eq!(screen.history(), vec!["done"]);
     assert_eq!(screen.cursor(), (1, 0), "the shell continues right under the output");
 }
+
+#[test]
+fn linked_cells_and_lines_are_wrapped_in_osc8_and_printed_without_the_mark() {
+    use crate::text::link::{self, CLOSE};
+    use ratatui::text::Span;
+    let mut buf = Buffer::empty(ratatui::layout::Rect::new(0, 0, 12, 1));
+    let line = Line::from(vec![
+        Span::raw("go "),
+        Span::styled("docs", link::style("https://a.io/d")),
+    ]);
+    buf.set_line(0, 0, &line, 12);
+    let empty = Buffer::empty(buf.area);
+    let mut out = Vec::new();
+    super::screen::draw_cells(&mut out, empty.diff(&buf)).unwrap();
+    let out = String::from_utf8(out).unwrap();
+    let id = link::id_of(link::mark("https://a.io/d").underline_color).unwrap();
+    let open = format!("\x1b]8;id=kt{id};https://a.io/d\x1b\\");
+    // one open before the link's first cell, one close after its last, nothing else linked
+    assert_eq!(out.matches(&open).count(), 1, "{out:?}");
+    assert_eq!(out.matches(CLOSE).count(), 1, "{out:?}");
+    let (before, rest) = out.split_once(&open).unwrap();
+    assert!(before.contains("go") && !before.contains('d'), "{out:?}");
+    let (inside, _) = rest.split_once(CLOSE).unwrap();
+    assert!(inside.contains('d') && inside.contains('s'), "{out:?}");
+    // the mark is never printed as an underline colour (SGR 58)
+    assert!(!out.contains("[58"), "{out:?}");
+
+    let mut out = Vec::new();
+    super::history::write_line(&mut out, &line).unwrap();
+    let out = String::from_utf8(out).unwrap();
+    assert!(out.contains(&format!("{open}docs{CLOSE}")), "{out:?}");
+}

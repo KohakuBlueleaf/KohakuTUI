@@ -31,7 +31,10 @@ class App(CoreMixin, ControlMixin, DialogsMixin, CaptureMixin):
     ``"plain"`` or ``"test"`` (an emulated ``size`` screen). ``interrupt`` decides ctrl+c:
     ``"raise"`` (KeyboardInterrupt in the main thread), ``"signal"`` (SIGINT, Unix),
     ``"event"`` (only an ``interrupt`` event) or ``"exit"``; ``"auto"`` is signal on Unix and
-    raise elsewhere. ``theme`` is a scheme from ``THEMES`` applied at start.
+    raise elsewhere. ``theme`` is a scheme from ``THEMES`` applied at start. ``links`` is
+    ``"auto"`` (OSC 8 hyperlinks on a terminal, ``text (url)`` on plain output), ``"osc8"`` or
+    ``"text"`` (for terminals that drop OSC 8). With ``open_links``, a link clicked in full
+    screen (a ``link`` event) opens in the browser: http, https and mailto only.
     """
 
     def __init__(
@@ -43,13 +46,22 @@ class App(CoreMixin, ControlMixin, DialogsMixin, CaptureMixin):
         interrupt: str = "auto",
         max_fps: int = 60,
         theme: str | None = None,
+        links: str = "auto",
+        open_links: bool = True,
     ):
         if interrupt == "auto":
             interrupt = "signal" if os.name == "posix" else "raise"
         session = _rs._Session(
-            backend=backend, mode=mode, size=size, interrupt=interrupt, max_fps=max_fps
+            backend=backend,
+            mode=mode,
+            size=size,
+            interrupt=interrupt,
+            max_fps=max_fps,
+            links=links,
         )
-        self._init_core_state(session, raise_on_interrupt=interrupt == "raise")
+        self._init_core_state(
+            session, raise_on_interrupt=interrupt == "raise", open_links=open_links
+        )
         self._init_control_state()
         self._init_capture_state()
 

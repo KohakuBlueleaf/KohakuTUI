@@ -9,7 +9,7 @@ use super::props::{upd_bool, upd_opt_str, upd_str, upd_usize};
 use super::{Component, Ctx, WidgetError};
 use crate::proto::value::display;
 use crate::proto::Value;
-use crate::text::{display_width, theme, wrap_text};
+use crate::text::{display_width, link, theme, wrap_text};
 
 fn text_data(kind: &'static str, data: &Value) -> Result<String, WidgetError> {
     match data {
@@ -21,7 +21,7 @@ fn text_data(kind: &'static str, data: &Value) -> Result<String, WidgetError> {
     }
 }
 
-/// Wrapped text in one style.
+/// Wrapped text in one style; with `link`, the whole text is a link to that URL.
 #[derive(Debug, Default)]
 pub struct Text {
     value: String,
@@ -29,6 +29,7 @@ pub struct Text {
     bold: bool,
     dim: bool,
     italic: bool,
+    link: Option<String>,
 }
 
 impl Text {
@@ -43,7 +44,22 @@ impl Text {
         if self.italic {
             s = s.add_modifier(Modifier::ITALIC);
         }
-        s
+        match &self.link {
+            // a tone keeps its colour; otherwise links take the theme's link colour
+            Some(url) if self.tone.is_empty() => s.patch(link::style(url)),
+            Some(url) => s.add_modifier(Modifier::UNDERLINED).patch(link::mark(url)),
+            None => s,
+        }
+    }
+
+    /// The text as shown: with links written as text, the URL follows (unless it is the text).
+    fn shown(&self) -> String {
+        match &self.link {
+            Some(url) if !link::osc8() && !url.is_empty() && *url != self.value => {
+                format!("{} ({url})", self.value)
+            }
+            _ => self.value.clone(),
+        }
     }
 }
 
@@ -58,6 +74,7 @@ impl Component for Text {
         upd_bool(p, "bold", &mut self.bold, false);
         upd_bool(p, "dim", &mut self.dim, false);
         upd_bool(p, "italic", &mut self.italic, false);
+        upd_opt_str(p, "link", &mut self.link);
         Ok(())
     }
 
@@ -67,7 +84,7 @@ impl Component for Text {
     }
 
     fn lines(&self, width: u16, _ctx: &Ctx) -> Vec<Line<'static>> {
-        wrap_text(&self.value, self.style(), width as usize)
+        wrap_text(&self.shown(), self.style(), width as usize)
     }
 
     fn as_any(&self) -> &dyn Any {

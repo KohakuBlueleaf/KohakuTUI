@@ -747,3 +747,132 @@ fn bound_chords_become_actions_and_ctrl_keys_have_builtin_meanings() {
     assert_eq!(c, Outcome::Interrupt);
     assert!(Chord::parse("hyper+x").is_none());
 }
+
+#[test]
+fn tab_reaches_a_control_in_an_open_reply_and_esc_gives_the_keys_back() {
+    let mut m = Model::new();
+    create(&mut m, 40, "composer", BOTTOM, Value::Map(vec![]));
+    create(&mut m, 50, "cell", TRANSCRIPT, map(vec![("role", "assistant".into())]));
+    let slider = map(vec![
+        ("control", "slider".into()),
+        ("value", 1.into()),
+        ("max", 9.into()),
+    ]);
+    create(&mut m, 51, "field", 50, slider);
+    let mut vs = ViewState::new(Mode::Inline);
+    let mut events = Vec::new();
+    let press = |m: &mut Model, vs: &mut ViewState, k: KeyCode, events: &mut Vec<Event>| {
+        handle_input(m, vs, key(k, KeyModifiers::NONE), events)
+    };
+
+    press(&mut m, &mut vs, KeyCode::Tab, &mut events);
+    assert_eq!(super::layout::input_target(&m, &vs), Some(51), "tab wraps to the form");
+    press(&mut m, &mut vs, KeyCode::Right, &mut events);
+    // the control draws as focused (its key hint) though it sits inside a cell
+    let ctx = ctx().with_focus(super::layout::input_target(&m, &vs));
+    let rows = texts(&cell_parts(&m, 50, 60, &ctx).all());
+    assert!(rows[0].ends_with("2  ←/→"), "{rows:?}");
+    press(&mut m, &mut vs, KeyCode::Esc, &mut events);
+    assert_eq!(super::layout::input_target(&m, &vs), Some(40), "esc: back to the input");
+    assert_eq!(events, vec![Event::Change { id: 51, value: 2.into() }], "no escape action");
+
+    // once the reply is sealed its controls are static: tab no longer reaches them
+    m.apply(Op::Seal { id: 50 }).unwrap();
+    press(&mut m, &mut vs, KeyCode::Tab, &mut events);
+    assert_eq!(super::layout::input_target(&m, &vs), Some(40));
+}
+
+#[test]
+fn columns_sit_side_by_side_pack_or_stack_and_tabs_show_one_pane() {
+    let mut m = Model::new();
+    let text = |v: &str| map(vec![("value", v.into())]);
+    create(&mut m, 60, "columns", TRANSCRIPT, map(vec![("count", 2.into())]));
+    create(&mut m, 61, "text", 60, text("left"));
+    create(&mut m, 62, "text", 60, text("right"));
+    let mut sink = None;
+    let rows = texts(&super::render::node_lines(&m, 60, 40, &ctx(), None, &mut sink));
+    // two columns of (40 - 3) / 2 = 18: "left" padded to 18, the gap of 3, then "right"
+    assert_eq!(rows, vec![format!("left{}right", " ".repeat(14 + 3))]);
+    // too narrow for two 16-wide columns: they stack
+    let rows = texts(&super::render::node_lines(&m, 60, 30, &ctx(), None, &mut sink));
+    assert_eq!(rows, vec!["left", "right"]);
+
+    // packed: each child at its own width, wrapping when the row is full
+    create(
+        &mut m,
+        70,
+        "columns",
+        TRANSCRIPT,
+        map(vec![("pack", true.into()), ("gap", 2.into())]),
+    );
+    for (i, word) in ["[live]", "[v2]", "[beta]"].iter().enumerate() {
+        create(&mut m, 71 + i as NodeId, "text", 70, text(word));
+    }
+    let rows = texts(&super::render::node_lines(&m, 70, 40, &ctx(), None, &mut sink));
+    assert_eq!(rows, vec!["[live]  [v2]  [beta]"]);
+    let rows = texts(&super::render::node_lines(&m, 70, 14, &ctx(), None, &mut sink));
+    assert_eq!(rows, vec!["[live]  [v2]", "[beta]"]);
+
+    let labels = Value::Array(vec!["One".into(), "Two".into()]);
+    create(
+        &mut m,
+        80,
+        "tabs",
+        TRANSCRIPT,
+        map(vec![("labels", labels), ("active", 1.into())]),
+    );
+    create(&mut m, 81, "text", 80, text("pane one"));
+    create(&mut m, 82, "text", 80, text("pane two"));
+    let rows = texts(&super::render::node_lines(&m, 80, 40, &ctx(), None, &mut sink));
+    assert_eq!(rows, vec![" One │ Two ", "pane two"], "only the active pane");
+    // a control in a closed tab cannot take the keys
+    let labels = Value::Array(vec!["A".into(), "B".into()]);
+    create(
+        &mut m,
+        90,
+        "tabs",
+        TRANSCRIPT,
+        map(vec![("labels", labels), ("active", 1.into())]),
+    );
+    create(&mut m, 91, "stack", 90, Value::Map(vec![]));
+    create(&mut m, 92, "stack", 90, Value::Map(vec![]));
+    create(&mut m, 83, "field", 91, map(vec![("control", "toggle".into())]));
+    create(&mut m, 84, "field", 92, map(vec![("control", "toggle".into())]));
+    assert!(m.hidden(83) && !m.hidden(84));
+    let mut vs = ViewState::new(Mode::Inline);
+    vs.focus = Some(83);
+    assert_ne!(super::layout::input_target(&m, &vs), Some(83));
+}
+
+#[test]
+fn a_click_on_a_link_in_full_screen_reports_its_url() {
+    let mut m = Model::new();
+    create(
+        &mut m,
+        100,
+        "markdown",
+        TRANSCRIPT,
+        map(vec![("source", "see [docs](https://a.io/d) now".into())]),
+    );
+    let mut vs = ViewState::new(Mode::Fullscreen);
+    let mut buf = Buffer::empty(Rect::new(0, 0, 40, 6));
+    fullscreen(&m, &mut vs, &mut buf, &ctx());
+    vs.link_hits = super::link_hits(&buf);
+    let &(row, x0, x1, _) = vs.link_hits.first().expect("a link was drawn");
+    assert_eq!(x1 - x0, 4, "the four cells of `docs`");
+
+    let mut events = Vec::new();
+    let press = MouseEventKind::Down(MouseButton::Left);
+    let release = MouseEventKind::Up(MouseButton::Left);
+    handle_mouse(&mut m, &mut vs, press, x0 + 1, row, &mut events);
+    handle_mouse(&mut m, &mut vs, release, x0 + 1, row, &mut events);
+    assert_eq!(events, vec![Event::Link { url: "https://a.io/d".into() }]);
+    // off the link, and a drag over it, report nothing
+    events.clear();
+    handle_mouse(&mut m, &mut vs, press, x1 + 2, row, &mut events);
+    handle_mouse(&mut m, &mut vs, release, x1 + 2, row, &mut events);
+    handle_mouse(&mut m, &mut vs, press, x0, row, &mut events);
+    handle_mouse(&mut m, &mut vs, MouseEventKind::Drag(MouseButton::Left), x1, row, &mut events);
+    handle_mouse(&mut m, &mut vs, release, x1, row, &mut events);
+    assert!(events.is_empty(), "{events:?}");
+}

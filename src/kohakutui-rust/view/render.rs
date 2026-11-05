@@ -9,7 +9,7 @@ use ratatui::text::{Line, Span};
 use crate::model::{Model, TRANSCRIPT};
 use crate::proto::NodeId;
 use crate::text::{clip, display_width, theme, MdLine};
-use crate::widgets::{Cell, Ctx, Markdown, Role, Stack};
+use crate::widgets::{Cell, Columns, Ctx, Markdown, Role, Stack};
 
 /// A cell's lines, split for incremental flushing.
 #[derive(Default)]
@@ -69,8 +69,33 @@ pub(crate) fn node_lines(
 
     let gap = m.comp_as::<Stack>(id).map_or(0, |s| s.gap);
     let header = out.len() as u16;
+    let shown: Vec<NodeId> = node
+        .children
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| node.comp.shows_child(*i))
+        .map(|(_, c)| *c)
+        .collect();
+    if let Some((per_row, col_gap)) = node.comp.side_by_side() {
+        let min = m.comp_as::<Columns>(id).map_or(16, |c| c.min_width);
+        if m.comp_as::<Columns>(id).is_some_and(|c| c.pack) {
+            out.extend(packed(m, &shown, col_gap, width, &ctx.focused(false), target));
+            return out;
+        }
+        out.extend(side_by_side(
+            m,
+            &shown,
+            per_row,
+            col_gap,
+            min,
+            width,
+            &ctx.focused(false),
+            target,
+        ));
+        return out;
+    }
     let mut children = Vec::new();
-    for (i, child) in node.children.iter().enumerate() {
+    for (i, child) in shown.iter().enumerate() {
         if i > 0 {
             children.extend((0..gap).map(|_| Line::default()));
         }
@@ -92,6 +117,123 @@ pub(crate) fn node_lines(
         }
     }
     out.extend(node.comp.frame_children(children, width));
+    out
+}
+
+/// Children in rows of `per_row` (0: one row), each at its share of `width` and padded to it;
+/// the rows of one band are zipped together. Columns narrower than `min` stack instead.
+#[allow(clippy::too_many_arguments)]
+fn side_by_side(
+    m: &Model,
+    children: &[NodeId],
+    per_row: usize,
+    gap: usize,
+    min: usize,
+    width: u16,
+    ctx: &Ctx,
+    target: Option<NodeId>,
+) -> Vec<Line<'static>> {
+    let per_row = if per_row == 0 {
+        children.len().max(1)
+    } else {
+        per_row
+    };
+    let w = width as usize;
+    let col_w = w.saturating_sub(gap * per_row.saturating_sub(1)) / per_row;
+    let mut out = Vec::new();
+    if col_w < min || per_row == 1 {
+        for child in children {
+            let mut sink = None;
+            out.extend(node_lines(m, *child, width, ctx, target, &mut sink));
+        }
+        return out;
+    }
+    for (band, row) in children.chunks(per_row).enumerate() {
+        if band > 0 {
+            out.push(Line::default());
+        }
+        let cols: Vec<Vec<Line<'static>>> = row
+            .iter()
+            .map(|child| {
+                let mut sink = None;
+                node_lines(m, *child, col_w as u16, ctx, target, &mut sink)
+            })
+            .collect();
+        let height = cols.iter().map(Vec::len).max().unwrap_or(0);
+        for r in 0..height {
+            let mut spans: Vec<Span<'static>> = Vec::new();
+            for (c, col) in cols.iter().enumerate() {
+                if c > 0 {
+                    spans.push(Span::raw(" ".repeat(gap)));
+                }
+                let line = col
+                    .get(r)
+                    .cloned()
+                    .map(|l| clip(l, col_w))
+                    .unwrap_or_default();
+                let used: usize = line.spans.iter().map(|s| display_width(&s.content)).sum();
+                spans.extend(line.spans);
+                if c + 1 < cols.len() {
+                    spans.push(Span::raw(" ".repeat(col_w.saturating_sub(used))));
+                }
+            }
+            out.push(Line::from(spans));
+        }
+    }
+    out
+}
+
+/// Children at their own width, left to right, wrapping to a new band when the next one does
+/// not fit; each band is as tall as its tallest child.
+fn packed(
+    m: &Model,
+    children: &[NodeId],
+    gap: usize,
+    width: u16,
+    ctx: &Ctx,
+    target: Option<NodeId>,
+) -> Vec<Line<'static>> {
+    let w = width as usize;
+    let line_w = |l: &Line<'static>| {
+        l.spans
+            .iter()
+            .map(|s| display_width(&s.content))
+            .sum::<usize>()
+    };
+    let mut bands: Vec<Vec<(usize, Vec<Line<'static>>)>> = vec![Vec::new()];
+    let mut used = 0;
+    for child in children {
+        let mut sink = None;
+        let lines = node_lines(m, *child, width, ctx, target, &mut sink);
+        let own = lines.iter().map(line_w).max().unwrap_or(0).min(w);
+        let need = if used == 0 { own } else { used + gap + own };
+        if need > w && used > 0 {
+            bands.push(Vec::new());
+            used = own;
+        } else {
+            used = need;
+        }
+        bands.last_mut().expect("a band").push((own, lines));
+    }
+    let mut out = Vec::new();
+    for band in bands.into_iter().filter(|b| !b.is_empty()) {
+        let height = band.iter().map(|(_, l)| l.len()).max().unwrap_or(0);
+        for r in 0..height {
+            let mut spans: Vec<Span<'static>> = Vec::new();
+            for (c, (own, lines)) in band.iter().enumerate() {
+                if c > 0 {
+                    spans.push(Span::raw(" ".repeat(gap)));
+                }
+                let line = lines.get(r).cloned().unwrap_or_default();
+                let pad = own.saturating_sub(line_w(&line));
+                spans.extend(line.spans);
+                if c + 1 < band.len() {
+                    spans.push(Span::raw(" ".repeat(pad)));
+                }
+            }
+            out.push(Line::from(spans));
+        }
+    }
     out
 }
 
@@ -207,8 +349,9 @@ fn child_lines(m: &Model, child: NodeId, width: u16, ctx: &Ctx) -> ChildLines {
         }
         return (parts.all(), heads, scrolls);
     }
+    // a control inside a cell (a form in a reply) draws as focused when it has the keys
     let mut sink = None;
-    let lines = node_lines(m, child, width, ctx, None, &mut sink);
+    let lines = node_lines(m, child, width, ctx, ctx.focus, &mut sink);
     let scrolls = match m.comp(child).map(|c| c.kind()) {
         Some("scroll") => vec![(0, lines.len(), child)],
         _ => Vec::new(),

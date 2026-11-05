@@ -122,6 +122,8 @@ impl Engine {
     }
 
     fn start(&mut self) {
+        // plain output cannot be clicked: links are written as "text (url)" there
+        crate::text::link::set_osc8(self.cfg.links && !self.term.is_plain());
         if self.cfg.mode == Mode::Fullscreen {
             self.set_mode(Mode::Fullscreen);
         }
@@ -264,6 +266,18 @@ impl Engine {
             }),
             Op::Bell => {
                 let _ = self.term.bell();
+            }
+            Op::SetLinks { osc8 } => {
+                crate::text::link::set_osc8(osc8 && !self.term.is_plain());
+                self.vs.cache.clear();
+            }
+            Op::Copy { text } => {
+                let _ = self.term.copy(&text);
+                self.vs.toasts.push(Toast {
+                    text: format!("copied {} characters", text.chars().count()),
+                    level: crate::proto::Level::Info,
+                    until: Instant::now() + Duration::from_millis(2500),
+                });
             }
             Op::SetTheme { scheme, overrides, truecolor } => {
                 let truecolor = truecolor.unwrap_or_else(crate::text::theme::detect_truecolor);
@@ -422,8 +436,9 @@ impl Engine {
     }
 
     fn try_draw(&mut self) -> std::io::Result<()> {
-        let ctx = Ctx::new(Instant::now(), self.epoch);
         self.vs.track_overlay(self.model.top_overlay());
+        let focus = view::input_target(&self.model, &self.vs);
+        let ctx = Ctx::new(Instant::now(), self.epoch).with_focus(focus);
         let (cols, rows) = self.term.size();
         self.term.begin_frame()?;
 
@@ -459,6 +474,7 @@ impl Engine {
                 self.term.set_viewport(rows)?;
                 let mut buf = Buffer::empty(self.term.area());
                 let cursor = view::fullscreen(&self.model, &mut self.vs, &mut buf, &ctx);
+                self.vs.link_hits = view::link_hits(&buf);
                 self.term.draw(&buf, cursor)?;
                 if let Some(text) = self.vs.copied.take() {
                     self.copy(text)?;

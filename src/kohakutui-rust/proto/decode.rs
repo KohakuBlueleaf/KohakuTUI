@@ -51,6 +51,10 @@ impl Op {
                 },
             },
             "bell" => Op::Bell,
+            "copy" => Op::Copy { text: req_str(v, "text")?.to_owned() },
+            "set_links" => {
+                Op::SetLinks { osc8: get(v, "osc8").and_then(Value::as_bool).unwrap_or(true) }
+            }
             "set_theme" => Op::SetTheme {
                 scheme: req_str(v, "scheme")?.to_owned(),
                 overrides: match get(v, "overrides") {

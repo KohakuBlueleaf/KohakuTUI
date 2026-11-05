@@ -8,9 +8,9 @@ use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, T
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use super::theme;
 use super::wrap::{display_width, wrap_spans};
 use super::MdLine;
+use super::{link, theme};
 
 /// Renders `src` at `width` columns.
 pub fn render(src: &str, width: usize) -> Vec<MdLine> {
@@ -47,7 +47,9 @@ struct Renderer<'a> {
     lists: Vec<Option<u64>>,
     need_blank: bool,
     code: Option<usize>,
-    links: Vec<String>,
+    /// Open links: the URL and whether its text carries the link mark (OSC 8), else the URL is
+    /// written after the text.
+    links: Vec<(String, bool)>,
     table: Option<Table>,
     heading: bool,
 }
@@ -105,6 +107,22 @@ impl<'a> Renderer<'a> {
             self.span_src = Some(self.line_start(at));
         }
         self.spans.push(Span::styled(text.to_owned(), style));
+    }
+
+    /// Prose with its bare `http(s)://` URLs as links (a wrapped URL stays one link).
+    fn linkified(&mut self, text: &str, at: usize) {
+        let mut from = 0;
+        for (start, end) in link::find_urls(text) {
+            if start > from {
+                self.text(&text[from..start], at, self.style());
+            }
+            let url = &text[start..end];
+            self.text(url, at, self.style().patch(link::style(url)));
+            from = end;
+        }
+        if from < text.len() {
+            self.text(&text[from..], at, self.style());
+        }
     }
 
     /// Prefix spans for the next visual line, and the width they take.
@@ -185,6 +203,7 @@ impl<'a> Renderer<'a> {
             Event::End(tag) => self.end(tag),
             Event::Text(t) => match self.code {
                 Some(_) => self.code_text(&t, at),
+                None if self.links.is_empty() => self.linkified(&t, at),
                 None => self.text(&t, at, self.style()),
             },
             Event::Code(t) => self.text(&t, at, self.style().patch(theme::code())),
@@ -279,11 +298,13 @@ impl<'a> Renderer<'a> {
                 self.push_style(Style::default().add_modifier(Modifier::CROSSED_OUT))
             }
             Tag::Link { dest_url, .. } => {
-                self.links.push(dest_url.into_string());
-                self.push_style(theme::accent().add_modifier(Modifier::UNDERLINED));
+                let url = dest_url.into_string();
+                let marked = link::osc8() && link::linkable(&url);
+                self.push_style(link::style(&url));
+                self.links.push((url, marked));
             }
             Tag::Image { dest_url, .. } => {
-                self.links.push(dest_url.into_string());
+                self.links.push((dest_url.into_string(), false));
                 self.text("[image: ", at, theme::muted());
                 self.push_style(theme::muted());
             }
@@ -335,7 +356,8 @@ impl<'a> Renderer<'a> {
             TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough => self.pop_style(),
             TagEnd::Link => {
                 self.pop_style();
-                if let Some(url) = self.links.pop() {
+                // a marked link is clickable as it is; otherwise the URL is written after it
+                if let Some((url, false)) = self.links.pop() {
                     let shown: String = self.spans.iter().map(|s| s.content.as_ref()).collect();
                     if !url.is_empty() && !shown.ends_with(url.as_str()) {
                         let at = self.span_src.unwrap_or(0);

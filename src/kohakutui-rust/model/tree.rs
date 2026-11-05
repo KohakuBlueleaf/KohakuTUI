@@ -103,6 +103,35 @@ impl Model {
         }
     }
 
+    /// Whether `id` sits in a pane its container does not draw (a tab that is not open).
+    pub fn hidden(&self, id: NodeId) -> bool {
+        let mut cur = id;
+        while let Some(n) = self.nodes.get(&cur) {
+            let Some(parent) = self.nodes.get(&n.parent) else {
+                return false;
+            };
+            if let Some(i) = parent.children.iter().position(|c| *c == cur) {
+                if !parent.comp.shows_child(i) {
+                    return true;
+                }
+            }
+            cur = n.parent;
+        }
+        false
+    }
+
+    /// Whether any ancestor of `id` is sealed (its controls are then static).
+    pub fn ancestors_sealed(&self, id: NodeId) -> bool {
+        let mut cur = self.nodes.get(&id).map_or(0, |n| n.parent);
+        while let Some(n) = self.nodes.get(&cur) {
+            if n.sealed {
+                return true;
+            }
+            cur = n.parent;
+        }
+        false
+    }
+
     /// The region a node lives in, None for an unknown node.
     pub fn region_of(&self, id: NodeId) -> Option<NodeId> {
         let mut cur = id;

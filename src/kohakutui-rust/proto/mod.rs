@@ -84,6 +84,15 @@ pub enum Op {
         ttl_ms: u32,
     },
     Bell,
+    /// Puts text on the system clipboard (OSC 52) with a "copied" notice.
+    Copy {
+        text: String,
+    },
+    /// Links as OSC 8 hyperlinks (true, the default on a terminal) or written as "text (url)".
+    /// Send it before drawing: text already laid out keeps its form.
+    SetLinks {
+        osc8: bool,
+    },
     /// Switches the theme: a built-in scheme, entries overriding it (role or palette name →
     /// `#rrggbb` or another name), and forced truecolor on/off (detected when unset).
     SetTheme {
@@ -135,6 +144,10 @@ pub enum Event {
     /// Text the user selected in full screen, copied to the clipboard.
     Copy {
         text: String,
+    },
+    /// A link clicked in full screen (inline, the terminal handles links itself).
+    Link {
+        url: String,
     },
     Error {
         id: Option<NodeId>,

@@ -6,12 +6,50 @@ use crossterm::cursor::{Hide, MoveTo, Show};
 use crossterm::queue;
 use crossterm::terminal::{self, Clear, ClearType};
 use ratatui::backend::{Backend as _, CrosstermBackend};
-use ratatui::buffer::Buffer;
+use ratatui::buffer::{Buffer, Cell};
 use ratatui::layout::Rect;
+use ratatui::style::Color;
 
 use super::guard::{mark_active, mark_fullscreen, restore_bytes};
 use super::out::TtyOut;
 use super::{Backend, History, Out, Term, TermError};
+use crate::text::link;
+
+/// Prints changed cells; each run of cells sharing a link sits between OSC 8 open and close,
+/// and the mark (`underline_color`, see `text::link`) is stripped before the cell is printed.
+pub(crate) fn draw_cells(out: &mut impl Write, cells: Vec<(u16, u16, &Cell)>) -> io::Result<()> {
+    let mut open: Option<u32> = None;
+    let mut run: Vec<(u16, u16, Cell)> = Vec::new();
+    let flush = |out: &mut dyn Write, run: &mut Vec<(u16, u16, Cell)>| -> io::Result<()> {
+        if !run.is_empty() {
+            let mut backend = CrosstermBackend::new(out);
+            backend.draw(run.iter().map(|(x, y, c)| (*x, *y, c)))?;
+            run.clear();
+        }
+        Ok(())
+    };
+    for (x, y, cell) in cells {
+        let id = link::id_of(Some(cell.underline_color));
+        if id != open {
+            flush(out, &mut run)?;
+            if open.is_some() {
+                out.write_all(link::CLOSE.as_bytes())?;
+            }
+            if let Some(id) = id {
+                out.write_all(link::open(id).as_bytes())?;
+            }
+            open = id;
+        }
+        let mut plain = cell.clone();
+        plain.underline_color = Color::Reset;
+        run.push((x, y, plain));
+    }
+    flush(out, &mut run)?;
+    if open.is_some() {
+        out.write_all(link::CLOSE.as_bytes())?;
+    }
+    Ok(())
+}
 
 /// SGR-encoded button reports: clicks and the wheel, no motion.
 #[cfg(not(windows))]
@@ -192,10 +230,8 @@ impl Term {
             _ => Buffer::empty(area),
         };
 
-        {
-            let mut backend = CrosstermBackend::new(&mut self.out);
-            backend.draw(prev.diff(buf).into_iter())?;
-        }
+        // diffed with the link marks in place, so a cell whose link changed is redrawn
+        draw_cells(&mut self.out, prev.diff(buf))?;
         match cursor {
             Some((x, y)) => queue!(self.out, MoveTo(x, y), Show)?,
             None => queue!(self.out, Hide)?,

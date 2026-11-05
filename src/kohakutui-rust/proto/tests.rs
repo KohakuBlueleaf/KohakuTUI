@@ -25,6 +25,8 @@ fn all_ops() -> Vec<Op> {
         Op::Unbind { chord: "ctrl+k".into() },
         Op::Notify { text: "saved".into(), level: Level::Success, ttl_ms: 1500 },
         Op::Bell,
+        Op::Copy { text: "copied ✓".into() },
+        Op::SetLinks { osc8: false },
         Op::SetTheme {
             scheme: "tokyo-night".into(),
             overrides: vec![("accent".into(), "#ff8800".into())],

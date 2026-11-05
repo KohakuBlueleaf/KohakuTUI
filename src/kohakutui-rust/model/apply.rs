@@ -87,6 +87,8 @@ impl Model {
             Op::Bind { .. } | Op::Unbind { .. } => Err(ModelError::NotTreeOp("bind")),
             Op::Notify { .. } => Err(ModelError::NotTreeOp("notify")),
             Op::Bell => Err(ModelError::NotTreeOp("bell")),
+            Op::Copy { .. } => Err(ModelError::NotTreeOp("copy")),
+            Op::SetLinks { .. } => Err(ModelError::NotTreeOp("set_links")),
             Op::SetTheme { .. } => Err(ModelError::NotTreeOp("set_theme")),
         }
     }

@@ -7,6 +7,7 @@ from ``stop()`` or because the engine ended, every send is a silent no-op.
 
 import atexit
 import threading
+import webbrowser
 import itertools
 import _thread
 from collections.abc import Iterator
@@ -16,6 +17,19 @@ from typing import Any
 from kohakutui import _rs
 from kohakutui.app.events import Dispatcher, Event
 
+# what a click may open: never file:// or a custom scheme that starts some other program
+OPENABLE = ("http://", "https://", "mailto:")
+
+
+def open_link(url: str) -> bool:
+    """Opens ``url`` in the browser on its own thread (a slow launcher never stalls events);
+    False for a URL that may not be opened."""
+    if not isinstance(url, str) or not url.lower().startswith(OPENABLE):
+        return False
+    threading.Thread(target=webbrowser.open, args=(url,), daemon=True).start()
+    return True
+
+
 FIRST_ID = 16
 
 
@@ -23,10 +37,14 @@ class CoreMixin:
     """Engine session, ids, sending and batching, start/stop and the pump thread."""
 
     def _init_core_state(
-        self, session: "_rs._Session", raise_on_interrupt: bool
+        self,
+        session: "_rs._Session",
+        raise_on_interrupt: bool,
+        open_links: bool = True,
     ) -> None:
         self._session = session
         self._raise_on_interrupt = raise_on_interrupt
+        self._open_links = open_links
         self._ids = itertools.count(FIRST_ID)
         self._id_lock = threading.Lock()
         self._send_lock = threading.Lock()
@@ -112,6 +130,8 @@ class CoreMixin:
                         self.ready = ev
                     case "interrupt" if self._raise_on_interrupt:
                         _thread.interrupt_main()
+                    case "link" if self._open_links:
+                        open_link(ev.data.get("url", ""))
                     case "stopped":
                         self._mark_stopped()
                 self.dispatcher.dispatch(ev)

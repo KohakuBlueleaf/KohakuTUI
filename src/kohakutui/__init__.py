@@ -8,7 +8,10 @@ from kohakutui._rs import PROTOCOL, reset_terminal, version
 from kohakutui.app import THEMES, App, Event
 from kohakutui.ui import (
     KV,
+    Bars,
     Button,
+    Columns,
+    Field,
     Card,
     Cell,
     Chart,
@@ -29,13 +32,17 @@ from kohakutui.ui import (
     Stack,
     Status,
     Table,
+    Tabs,
     Text,
     Widget,
 )
 
 __all__ = [
     "KV",
+    "Bars",
     "Button",
+    "Columns",
+    "Field",
     "PROTOCOL",
     "THEMES",
     "App",
@@ -60,6 +67,7 @@ __all__ = [
     "Stack",
     "Status",
     "Table",
+    "Tabs",
     "Text",
     "Widget",
     "reset_terminal",

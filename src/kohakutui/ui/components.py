@@ -53,7 +53,8 @@ class Component:
 
 @dataclass
 class Text(Component):
-    """Wrapped text in one style; ``append`` adds text."""
+    """Wrapped text in one style; ``append`` adds text. With ``link`` the whole text is a
+    hyperlink to that URL (http, https, mailto or file)."""
 
     kind: ClassVar[str] = "text"
     value: str = ""
@@ -61,6 +62,7 @@ class Text(Component):
     bold: bool | None = None
     dim: bool | None = None
     italic: bool | None = None
+    link: str | None = None
 
 
 @dataclass
@@ -337,3 +339,76 @@ class Button(Component):
     hint: str | None = None
     focused_hint: str | None = None
     segments: list[Any] | None = None
+
+
+@dataclass
+class Field(Component):
+    """One form control on one line; focusable wherever it is, also in an open transcript cell.
+
+    ``control``: ``slider`` / ``number`` (←/→ step by ``step`` within ``min``/``max``,
+    pgup/pgdn ten steps; a number also takes typed digits), ``select`` / ``radio`` (←/→ choose
+    one of ``options``: strings or ``{"label", "value"}``), ``toggle`` / ``checkbox`` (space
+    flips), ``rating`` (←/→, 0 to ``max``, default 5), ``text`` / ``date`` (an editable line,
+    ``placeholder`` while empty). Every change emits ``change`` with the new value; enter in a
+    text field also emits ``submit``. Echoing the value back with ``update(value=…)`` is safe:
+    an echo of a value the field sent itself is ignored. Esc gives the keys back to the input.
+    """
+
+    kind: ClassVar[str] = "field"
+    control: str = "text"
+    label: str = ""
+    value: Any = None
+    options: list[Any] | None = None
+    min: float | None = None
+    max: float | None = None
+    step: float | None = None
+    placeholder: str | None = None
+    disabled: bool | None = None
+
+
+@dataclass
+class Columns(Component):
+    """Children side by side, ``count`` per row (0: all in one row), ``gap`` columns apart.
+
+    Where a column would be narrower than ``min_width`` the children stack instead. With
+    ``pack`` every child keeps its own width (a row of badges) and the row wraps when full.
+    """
+
+    kind: ClassVar[str] = "columns"
+    children: list[Component] = field(default_factory=list)
+    count: int | None = None
+    gap: int | None = None
+    min_width: int | None = None
+    pack: bool | None = None
+
+
+@dataclass
+class Tabs(Component):
+    """A row of ``labels`` over its children (one pane each); only pane ``active`` is drawn.
+
+    Focusable: ←/→ or a click on a label switch, emitting ``change`` with the new index.
+    """
+
+    kind: ClassVar[str] = "tabs"
+    children: list[Component] = field(default_factory=list)
+    labels: list[str] = field(default_factory=list)
+    active: int = 0
+
+
+@dataclass
+class Bars(Component):
+    """Horizontal bars, one row per label (one per label and series when several series).
+
+    ``series`` is ``[{"name", "data"}]``. ``stacked`` draws the series as segments of one bar;
+    ``max`` fixes the full length (a gauge, shown as "value / max"); ``percent`` writes each
+    value as its share of the total (a pie as bars). ``digits`` defaults to none for whole
+    numbers, else two.
+    """
+
+    kind: ClassVar[str] = "bars"
+    labels: list[str] = field(default_factory=list)
+    series: list[Any] = field(default_factory=list)
+    stacked: bool | None = None
+    percent: bool | None = None
+    max: float | None = None
+    digits: int | None = None

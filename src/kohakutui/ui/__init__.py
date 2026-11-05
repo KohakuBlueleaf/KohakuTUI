@@ -2,7 +2,10 @@
 
 from kohakutui.ui.components import (
     KV,
+    Bars,
     Button,
+    Columns,
+    Field,
     Card,
     Cell,
     Chart,
@@ -22,6 +25,7 @@ from kohakutui.ui.components import (
     Stack,
     Status,
     Table,
+    Tabs,
     Text,
 )
 from kohakutui.ui.node import Node
@@ -29,7 +33,10 @@ from kohakutui.ui.widget import Widget
 
 __all__ = [
     "KV",
+    "Bars",
     "Button",
+    "Columns",
+    "Field",
     "Card",
     "Cell",
     "Chart",
@@ -50,6 +57,7 @@ __all__ = [
     "Stack",
     "Status",
     "Table",
+    "Tabs",
     "Text",
     "Widget",
 ]

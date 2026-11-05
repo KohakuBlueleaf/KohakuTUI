@@ -807,6 +807,161 @@ fn table_reads_rows_as_arrays_or_maps() {
     assert_eq!(out[3], "bb   │ 22");
 }
 
+fn changes(emits: &[Emit]) -> Vec<Value> {
+    emits
+        .iter()
+        .filter_map(|e| match e {
+            Emit::Change(v) => Some(v.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn fields_step_choose_flip_and_type_and_ignore_their_own_echoes() {
+    let none = KeyModifiers::NONE;
+    let field = |props: Value| build("field", &props).unwrap();
+
+    // a slider steps on its grid from min, clamps, and shift steps ten at once
+    let props = map(vec![
+        ("control", "slider".into()),
+        ("label", "Rate".into()),
+        ("value", 0.2.into()),
+        ("min", 0.into()),
+        ("max", 1.into()),
+        ("step", 0.1.into()),
+    ]);
+    let mut slider = field(props);
+    let got = keys(slider.as_mut(), &[(KeyCode::Right, none), (KeyCode::Right, none)], TYPED);
+    assert_eq!(changes(&got), vec![Value::from(0.3), Value::from(0.4)], "no float drift");
+    let got = keys(slider.as_mut(), &[(KeyCode::Right, KeyModifiers::SHIFT)], TYPED);
+    assert_eq!(changes(&got), vec![Value::from(1)], "clamped to max");
+    assert!(changes(&keys(slider.as_mut(), &[(KeyCode::Right, none)], TYPED)).is_empty());
+    assert!(
+        texts(slider.as_ref(), 60)[0].starts_with("Rate  ━━━━"),
+        "{:?}",
+        texts(slider.as_ref(), 60)
+    );
+
+    // radio and select choose among options by value
+    let options = Value::Array(vec![
+        "team".into(),
+        map(vec![("label", "Business".into()), ("value", "biz".into())]),
+    ]);
+    let props = map(vec![
+        ("control", "radio".into()),
+        ("value", "team".into()),
+        ("options", options),
+    ]);
+    let mut radio = field(props);
+    let got = keys(radio.as_mut(), &[(KeyCode::Right, none), (KeyCode::Right, none)], TYPED);
+    assert_eq!(changes(&got), vec![Value::from("biz")], "stops at the last option");
+    assert_eq!(texts(radio.as_ref(), 60)[0], "○ team  ◉ Business");
+
+    // a checkbox flips with space; it draws its label after the box
+    let mut check = field(map(vec![("control", "checkbox".into()), ("label", "Annual".into())]));
+    let got = keys(check.as_mut(), &[(KeyCode::Char(' '), none)], TYPED);
+    assert_eq!(changes(&got), vec![Value::from(true)]);
+    assert_eq!(texts(check.as_ref(), 60)[0], "☑ Annual");
+
+    // text: every edit is a change; an echo of an older value never undoes newer typing
+    let mut text = field(map(vec![("control", "text".into()), ("label", "Name".into())]));
+    let got = keys(text.as_mut(), &chars("Ann"), TYPED);
+    assert_eq!(changes(&got), vec!["A".into(), "An".into(), "Ann".into()]);
+    text.update(&map(vec![("value", "A".into())])).unwrap();
+    text.update(&map(vec![("value", "An".into())])).unwrap();
+    assert!(
+        texts(text.as_ref(), 40)[0].starts_with("Name  [Ann "),
+        "{:?}",
+        texts(text.as_ref(), 40)
+    );
+    // a value from elsewhere (not an echo) replaces the text
+    text.update(&map(vec![("value", "Bo".into())])).unwrap();
+    assert!(texts(text.as_ref(), 40)[0].starts_with("Name  [Bo "));
+
+    // a number takes typed digits, replacing the shown value
+    let mut number = field(map(vec![("control", "number".into()), ("value", 100.into())]));
+    let got = keys(number.as_mut(), &chars("25"), TYPED);
+    assert_eq!(changes(&got), vec![Value::from(2), Value::from(25)]);
+    let bad = map(vec![("control", "dial".into())]);
+    assert!(build("field", &bad).is_err());
+}
+
+#[test]
+fn bars_draw_grouped_stacked_gauge_and_percent_rows() {
+    let series = |rows: Vec<(&str, Vec<i64>)>| {
+        Value::Array(
+            rows.into_iter()
+                .map(|(name, data)| {
+                    let data = Value::Array(data.into_iter().map(Value::from).collect());
+                    map(vec![("name", name.into()), ("data", data)])
+                })
+                .collect(),
+        )
+    };
+    let labels = Value::Array(vec!["Q1".into(), "Q2".into()]);
+    let bars = |extra: Vec<(&str, Value)>, s: Value| {
+        let mut props = vec![("labels", labels.clone()), ("series", s)];
+        props.extend(extra);
+        build("bars", &map(props)).unwrap()
+    };
+
+    // one series: the longest bar fills the room, values right of it
+    let one = bars(vec![], series(vec![("", vec![2, 4])]));
+    let rows = texts(one.as_ref(), 30);
+    // half the value, half the length to the eighth of a cell: an odd room ends the shorter
+    // bar in a half block
+    let full = |r: &str| r.chars().filter(|c| *c == '█').count();
+    assert_eq!(full(&rows[0]) * 2 + 1, full(&rows[1]), "{rows:?}");
+    assert!(rows[0].contains("█▌"), "{rows:?}");
+    assert!(rows[1].ends_with(" 4") && rows[0].starts_with("Q1 │"), "{rows:?}");
+
+    // two series side by side: a legend, then one row per label and series
+    let two = series(vec![("a", vec![3, 5]), ("b", vec![2, 1])]);
+    let rows = texts(bars(vec![], two.clone()).as_ref(), 30);
+    assert_eq!(rows.len(), 5, "{rows:?}");
+    assert!(rows[0].starts_with("■ a  ■ b") && rows[2].starts_with("   │"));
+    // stacked: one bar per label holding the sum
+    let rows = texts(bars(vec![("stacked", true.into())], two).as_ref(), 30);
+    assert_eq!(rows.len(), 3);
+    assert!(rows[1].ends_with(" 5") && rows[2].ends_with(" 6"), "{rows:?}");
+
+    // a gauge shows value / max; percent shows shares of the total
+    let gauge = bars(vec![("max", 100.into())], series(vec![("", vec![62, 0])]));
+    assert!(texts(gauge.as_ref(), 40)[0].ends_with("62 / 100"));
+    let pie = bars(vec![("percent", true.into())], series(vec![("", vec![1, 3])]));
+    let rows = texts(pie.as_ref(), 30);
+    assert!(rows[0].ends_with("25%") && rows[1].ends_with("75%"), "{rows:?}");
+    // shares are drawn against the whole: 75% is three times 25%, and short of the full room
+    let full = |r: &str| r.chars().filter(|c| *c == '█').count();
+    assert!(full(&rows[1]) >= 3 * full(&rows[0]) && full(&rows[1]) <= 3 * full(&rows[0]) + 3);
+    assert!(rows[1].contains("│") && rows[1].contains("  "), "75% leaves room: {rows:?}");
+}
+
+#[test]
+fn a_short_chart_series_is_joined_into_a_line() {
+    let mut chart = build("chart", &map(vec![("height", 4.into())])).unwrap();
+    for v in [1, 4] {
+        chart.append(&map(vec![("s", v.into())])).unwrap();
+    }
+    // every plot column between the two points carries a dot: no gaps in the line
+    let rows = texts(chart.as_ref(), 30);
+    let plot: Vec<&String> = rows[1..5].iter().collect();
+    let width = plot[0].chars().count();
+    let start = plot[0]
+        .find('┤')
+        .map(|b| plot[0][..b].chars().count() + 1)
+        .unwrap();
+    for col in start..width {
+        let inked = plot.iter().any(|r| {
+            r.chars()
+                .nth(col)
+                .is_some_and(|c| ('\u{2801}'..='\u{28ff}').contains(&c))
+        });
+        assert!(inked, "column {col} has no dot: {rows:#?}");
+    }
+}
+
 #[test]
 fn markdown_shows_a_new_source_of_the_same_length() {
     // the render cache is keyed by width and source length: drawn, then replaced by an
@@ -816,4 +971,36 @@ fn markdown_shows_a_new_source_of_the_same_length() {
     md.update(&map(vec![("source", "will start 5 workers".into())]))
         .unwrap();
     assert_eq!(texts(md.as_ref(), 40), vec!["will start 5 workers"]);
+}
+
+#[test]
+fn tabs_switch_by_arrow_and_by_a_click_on_their_label() {
+    let labels = Value::Array(vec!["One".into(), "Two".into(), "Three".into()]);
+    let mut tabs = build("tabs", &map(vec![("labels", labels)])).unwrap();
+    let none = KeyModifiers::NONE;
+    // ← at the first tab stays put; → moves on and reports the new index
+    assert!(keys(tabs.as_mut(), &[(KeyCode::Left, none)], TYPED).is_empty());
+    let out = keys(tabs.as_mut(), &[(KeyCode::Right, none)], TYPED);
+    assert_eq!(out, vec![Emit::Change(Value::from(1u64))]);
+
+    // " One │ Two │ Three ": each click inside a label picks that tab
+    let row = texts(tabs.as_ref(), 40)[0].clone();
+    for (i, label) in ["One", "Two", "Three"].iter().enumerate() {
+        let col = row[..row.find(label).unwrap()].chars().count() as u16 + 1;
+        let mut out = Vec::new();
+        tabs.on_mouse(&click(0, col, 40), &mut out);
+        let picked = if i == 1 {
+            vec![]
+        } else {
+            vec![Emit::Change(Value::from(i as u64))]
+        };
+        assert_eq!(out, picked, "click at {col} on {label} in {row:?}");
+        if i != 1 {
+            // back to Two so each click is a change
+            tabs.on_mouse(
+                &click(0, row[..row.find("Two").unwrap()].chars().count() as u16, 40),
+                &mut Vec::new(),
+            );
+        }
+    }
 }
