@@ -118,4 +118,5 @@ fn close_clears_the_viewport_and_keeps_history() {
     frame(&mut t, &["› composer", "footer"]);
     t.close().unwrap();
     assert_eq!(screen.history(), vec!["done"]);
+    assert_eq!(screen.cursor(), (1, 0), "the shell continues right under the output");
 }

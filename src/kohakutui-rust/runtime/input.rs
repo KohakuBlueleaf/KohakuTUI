@@ -1,4 +1,5 @@
-//! The input thread: reads terminal events and forwards keys, pastes and resizes.
+//! The input thread: reads terminal events and forwards keys, pastes, resizes, clicks and wheel
+//! steps.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -6,7 +7,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{unbounded, Receiver};
-use crossterm::event::{self, Event as TermEvent, KeyEventKind};
+use crossterm::event::{self, Event as TermEvent, KeyEventKind, MouseButton, MouseEventKind};
 
 use super::InputEv;
 use crate::widgets::Input;
@@ -38,6 +39,16 @@ pub(crate) fn spawn(stop: Arc<AtomicBool>) -> (Receiver<InputEv>, Option<JoinHan
                     }
                     TermEvent::Paste(s) => InputEv::Input(Input::Paste(s)),
                     TermEvent::Resize(c, r) => InputEv::Resize(c, r),
+                    TermEvent::Mouse(me)
+                        if matches!(
+                            me.kind,
+                            MouseEventKind::Down(MouseButton::Left)
+                                | MouseEventKind::ScrollUp
+                                | MouseEventKind::ScrollDown
+                        ) =>
+                    {
+                        InputEv::Mouse { kind: me.kind, col: me.column, row: me.row }
+                    }
                     _ => continue,
                 };
                 if tx.send(msg).is_err() {

@@ -71,6 +71,11 @@ pub struct Term {
     saved_vt: u16,
     history: History,
     raw: bool,
+    /// Whether click and wheel reports are on.
+    mouse: bool,
+    /// The console input mode before mouse capture, restored exactly when it ends.
+    #[cfg(windows)]
+    saved_in_mode: Option<u32>,
 }
 
 /// The terminal cannot be used.

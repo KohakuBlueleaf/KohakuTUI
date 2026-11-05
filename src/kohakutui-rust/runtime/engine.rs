@@ -296,6 +296,9 @@ impl Engine {
         }
         self.vs.mode = mode;
         self.vs.scroll = 0;
+        if mode == Mode::Inline {
+            self.vs.expand_all = false;
+        }
         self.dirty = true;
         self.emit(Event::ModeChanged { mode });
     }
@@ -318,6 +321,16 @@ impl Engine {
                 Input::Key { code, mods, at: self.virt }
             }
             InputEv::Input(i) => i,
+            InputEv::Mouse { kind, col, row } => {
+                let mut events = Vec::new();
+                if view::handle_mouse(&mut self.model, &mut self.vs, kind, col, row, &mut events) {
+                    self.dirty = true;
+                }
+                for ev in events {
+                    self.emit(ev);
+                }
+                return;
+            }
         };
 
         let mut events = Vec::new();
@@ -334,6 +347,17 @@ impl Engine {
                     Mode::Fullscreen => Mode::Inline,
                 };
                 self.set_mode(next);
+            }
+            Outcome::ExpandAll => {
+                self.vs.toggled.clear();
+                match self.vs.mode {
+                    Mode::Inline => {
+                        self.vs.expand_all = true;
+                        self.set_mode(Mode::Fullscreen);
+                    }
+                    Mode::Fullscreen => self.vs.expand_all = !self.vs.expand_all,
+                }
+                self.dirty = true;
             }
             Outcome::Interrupt => self.interrupt(),
         }
@@ -378,6 +402,7 @@ impl Engine {
 
     fn try_draw(&mut self) -> std::io::Result<()> {
         let ctx = Ctx::new(Instant::now(), self.epoch);
+        self.vs.track_overlay(self.model.top_overlay());
         let (cols, rows) = self.term.size();
         self.term.begin_frame()?;
 
@@ -404,6 +429,9 @@ impl Engine {
                     .cursor
                     .filter(|(r, c)| *r < area.height && *c < area.width)
                     .map(|(r, c)| (area.x + c, area.y + r));
+                self.vs.overlay_hit = screen
+                    .overlay
+                    .map(|(id, r, c, w, h)| (id, i32::from(area.y) + r, area.x + c, w, h));
                 self.term.draw(&buf, cursor)?;
             }
             Mode::Fullscreen => {
@@ -413,6 +441,10 @@ impl Engine {
                 self.term.draw(&buf, cursor)?;
             }
         }
+
+        // the mouse is ours only in full screen: inline, the terminal keeps its own wheel
+        // scrolling and text selection at all times, dialog or not
+        self.term.set_mouse(self.vs.mode == Mode::Fullscreen)?;
         self.term.end_frame()
     }
 

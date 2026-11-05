@@ -83,6 +83,12 @@ pub(crate) fn cell_parts(m: &Model, id: NodeId, width: u16, ctx: &Ctx) -> CellPa
     let (Some(cell), Some(node)) = (m.comp_as::<Cell>(id), m.node(id)) else {
         return CellParts { prefix: Vec::new(), body: None, trailer: Vec::new() };
     };
+    if cell.folded(ctx) {
+        let mut prefix = cell.header(width, ctx);
+        prefix.extend(cell.summary_lines(width, node.sealed));
+        return CellParts { prefix, body: None, trailer: Vec::new() };
+    }
+
     let indent = cell.indent();
     let inner = width.saturating_sub(indent as u16).max(1);
 

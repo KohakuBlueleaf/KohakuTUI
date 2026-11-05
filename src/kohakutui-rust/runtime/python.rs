@@ -6,7 +6,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crossterm::event::{KeyCode, KeyModifiers};
+use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEventKind};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
@@ -162,7 +162,8 @@ impl PySession {
     }
 
     /// Feeds synthetic input to a test session: `{"text": s}` types at human pace,
-    /// `{"burst": s}` at paste pace, `{"key": "ctrl+t"}`, `{"paste": s}`, `{"resize": [c, r]}`.
+    /// `{"burst": s}` at paste pace, `{"key": "ctrl+t"}`, `{"paste": s}`, `{"resize": [c, r]}`,
+    /// `{"click": [col, row]}`, `{"scroll": n}` (wheel steps, positive is up).
     fn inject(&self, events: &Bound<'_, PyList>) -> PyResult<()> {
         self.test_screen()?;
         let mut out = Vec::new();
@@ -205,6 +206,21 @@ fn parse_inject(ev: &Bound<'_, PyDict>) -> PyResult<Vec<InputEv>> {
         let (cols, rows): (u16, u16) = r.extract()?;
         return Ok(vec![InputEv::Resize(cols, rows)]);
     }
+    if let Some(c) = ev.get_item("click")? {
+        let (col, row): (u16, u16) = c.extract()?;
+        let kind = MouseEventKind::Down(MouseButton::Left);
+        return Ok(vec![InputEv::Mouse { kind, col, row }]);
+    }
+    if let Some(n) = ev.get_item("scroll")? {
+        let n: i32 = n.extract()?;
+        let kind = if n > 0 {
+            MouseEventKind::ScrollUp
+        } else {
+            MouseEventKind::ScrollDown
+        };
+        let steps = n.unsigned_abs() as usize;
+        return Ok(vec![InputEv::Mouse { kind, col: 0, row: 0 }; steps]);
+    }
     if let Some(k) = ev.get_item("key")? {
         let name: String = k.extract()?;
         let chord = Chord::parse(&name)
@@ -212,7 +228,9 @@ fn parse_inject(ev: &Bound<'_, PyDict>) -> PyResult<Vec<InputEv>> {
         let (code, mods) = chord.parts();
         return Ok(vec![InputEv::Typed { code, mods, gap: Duration::from_millis(60) }]);
     }
-    Err(PyValueError::new_err("inject event needs text, burst, paste, resize or key"))
+    Err(PyValueError::new_err(
+        "inject event needs text, burst, paste, resize, key, click or scroll",
+    ))
 }
 
 /// Restores a terminal left in raw mode or on the alternate screen.

@@ -15,7 +15,7 @@ mod tests;
 use std::time::Duration;
 
 use crossbeam_channel::Sender;
-use crossterm::event::{KeyCode, KeyModifiers};
+use crossterm::event::{KeyCode, KeyModifiers, MouseEventKind};
 use thiserror::Error;
 
 use crate::proto::{Event, Mode, Value};
@@ -67,6 +67,12 @@ pub enum InputEv {
         gap: Duration,
     },
     Resize(u16, u16),
+    /// A click or wheel step (full screen only).
+    Mouse {
+        kind: MouseEventKind,
+        col: u16,
+        row: u16,
+    },
 }
 
 /// Messages to the engine thread.

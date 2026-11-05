@@ -9,9 +9,15 @@ use ratatui::backend::{Backend as _, CrosstermBackend};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
-use super::guard::{mark_active, restore_bytes};
+use super::guard::{mark_active, mark_fullscreen, restore_bytes};
 use super::out::TtyOut;
 use super::{Backend, History, Out, Term, TermError};
+
+/// SGR-encoded button reports: clicks and the wheel, no motion.
+#[cfg(not(windows))]
+const MOUSE_ON: &[u8] = b"\x1b[?1000h\x1b[?1006h";
+#[cfg(not(windows))]
+const MOUSE_OFF: &[u8] = b"\x1b[?1000l\x1b[?1006l";
 
 impl Term {
     /// Opens the terminal for `backend`, takes raw mode and anchors the viewport at the cursor.
@@ -42,6 +48,9 @@ impl Term {
             saved_vt: 0,
             history,
             raw: false,
+            mouse: false,
+            #[cfg(windows)]
+            saved_in_mode: None,
         }
     }
 
@@ -203,6 +212,7 @@ impl Term {
         write!(self.out, "\x1b[?1049h")?;
         queue!(self.out, MoveTo(0, 0), Clear(ClearType::All))?;
         self.fullscreen = true;
+        mark_fullscreen(true);
         self.vt = 0;
         self.vh = self.rows;
         self.prev = None;
@@ -217,10 +227,45 @@ impl Term {
         }
         write!(self.out, "\x1b[?1049l")?;
         self.fullscreen = false;
+        mark_fullscreen(false);
         self.vt = self.saved_vt.min(self.rows.saturating_sub(1));
         self.vh = 0;
         queue!(self.out, MoveTo(0, self.vt), Clear(ClearType::FromCursorDown))?;
         self.prev = None;
+        Ok(())
+    }
+
+    /// Turns click and wheel reports (no motion) on or off, on a real terminal only: the
+    /// Turns click and wheel reports (no motion) on or off, on a real terminal only: the
+    /// emulated test screen must not change the console mode of the process running the tests.
+    /// On Windows only the mouse bits change; every other input flag is kept and the exact
+    /// previous mode comes back when capture ends.
+    pub fn set_mouse(&mut self, on: bool) -> io::Result<()> {
+        if !self.raw || on == self.mouse {
+            return Ok(());
+        }
+        #[cfg(windows)]
+        {
+            use crossterm_winapi::{ConsoleMode, Handle};
+            const MOUSE_INPUT: u32 = 0x0010;
+            const QUICK_EDIT: u32 = 0x0040;
+            const EXTENDED_FLAGS: u32 = 0x0080;
+
+            let console = ConsoleMode::from(Handle::current_in_handle()?);
+            if on {
+                let mode = console.mode()?;
+                console.set_mode((mode | MOUSE_INPUT | EXTENDED_FLAGS) & !QUICK_EDIT)?;
+                self.saved_in_mode = Some(mode);
+            } else if let Some(mode) = self.saved_in_mode.take() {
+                console.set_mode(mode)?;
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            let seq = if on { MOUSE_ON } else { MOUSE_OFF };
+            self.out.write_all(seq)?;
+        }
+        self.mouse = on;
         Ok(())
     }
 
@@ -240,9 +285,12 @@ impl Term {
         if self.is_plain() {
             return self.out.flush();
         }
+        self.set_mouse(false)?;
         self.leave_fullscreen()?;
-        queue!(self.out, MoveTo(0, self.vt), Clear(ClearType::FromCursorDown), Show)?;
+
+        // reset first: resetting the scroll region homes the cursor
         self.out.write_all(restore_bytes())?;
+        queue!(self.out, MoveTo(0, self.vt), Clear(ClearType::FromCursorDown), Show)?;
         self.out.flush()?;
         if self.raw {
             terminal::disable_raw_mode()?;
