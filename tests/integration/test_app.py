@@ -16,6 +16,7 @@ from kohakutui import (
     App,
     Card,
     Cell,
+    Code,
     Composer,
     Log,
     Markdown,
@@ -51,7 +52,7 @@ class TestApp:
         with app.batch():
             panel = app.live.add(Stack(title="Status", children=[Text("first")]))
             line = panel.add(Text("second"))
-        until(app, lambda: app.screen()[:3] == ["Status", "first", "second"])
+        until(app, lambda: app.screen()[:4] == ["", "Status", "first", "second"])
 
         line.update(value="second, changed")
         line.append(" + more")
@@ -120,6 +121,50 @@ class TestApp:
         }
         assert app.choose("Nobody answers", ["a"], timeout=0.2) is None
         until(app, lambda: not any("│" in line for line in app.screen()))
+
+    def test_dialogs_answer_clicks_in_full_screen(self, app: App):
+        app.set_mode("fullscreen")
+        results = {}
+
+        def run(name, fn):
+            t = threading.Thread(target=lambda: results.update({name: fn()}))
+            t.start()
+            return t
+
+        def find(word: str) -> tuple[int, int] | None:
+            for row, line in enumerate(app.screen()):
+                if f" {word} " in line or line.rstrip(" │").endswith(f" {word}"):
+                    return line.index(word) + 1, row
+            return None
+
+        t = run("choose", lambda: app.choose("Pick", ["alpha", "beta", "gamma"]))
+        until(app, lambda: find("beta") is not None)
+        app.inject({"click": find("beta")})
+        t.join(3)
+
+        t = run("card", lambda: app.card("Deploy", "now?", ["go", "stop"]))
+        until(app, lambda: find("stop") is not None)
+        app.inject({"click": find("stop")})
+        t.join(3)
+        assert results == {"choose": "beta", "card": "stop"}
+
+    def test_typing_past_an_open_dialog_reaches_the_input(self, app: App):
+        composer = app.bottom.add(Composer())
+        sent = []
+        app.on("submit", composer)(lambda ev: sent.append(ev.value))
+        answer = {}
+        t = threading.Thread(
+            target=lambda: answer.update(v=app.card("Run?", "", ["yes", "no"]))
+        )
+        t.start()
+        until(app, lambda: any(" yes " in line for line in app.screen()))
+
+        app.inject({"text": "/tasks"}, {"key": "enter"})
+        until(app, lambda: sent == ["/tasks"])
+        assert t.is_alive(), "the dialog is still waiting"
+        app.inject({"key": "right"}, {"key": "enter"})
+        t.join(3)
+        assert answer == {"v": "no"}
 
     def test_dialogs_refuse_to_block_the_pump(self, app: App):
         errors = []
@@ -260,6 +305,29 @@ class TestApp:
         release.set()
         worker.join(3)
         until(app, lambda: "from the batch" in app.screen())
+
+    def test_folded_tool_cells_open_with_ctrl_o_and_clicks(self, app: App):
+        tool = Cell(
+            role="tool",
+            title="grep",
+            collapsed=True,
+            summary="3 matches",
+            children=[Code("rg --json pattern")],
+        )
+        app.transcript.add(tool).seal()
+        until(app, lambda: "  ⎿  3 matches  (ctrl+o to expand)" in app.history())
+        assert not any("rg --json" in line for line in app.history())
+
+        app.inject({"key": "ctrl+o"})
+        until(app, lambda: any("rg --json" in line for line in app.screen()))
+        header = app.screen().index("◆ grep")
+        app.inject({"click": (2, header)})
+        until(app, lambda: not any("rg --json" in line for line in app.screen()))
+        app.inject({"click": (2, header)})
+        until(app, lambda: any("rg --json" in line for line in app.screen()))
+
+        app.inject({"key": "ctrl+t"})
+        until(app, lambda: not any("rg --json" in line for line in app.screen()))
 
     def test_card_in_the_transcript_is_static(self, app: App):
         app.transcript.add(Card(title="Result", body="- one\n- two")).seal()
