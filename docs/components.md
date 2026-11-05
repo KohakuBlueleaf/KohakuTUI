@@ -2,7 +2,7 @@
 
 Every component is a dataclass in `kohakutui` (also `kohakutui.ui`). Pass it to `add`; change
 it later with `node.update(prop=value)`. Props left as `None` use the default. Containers
-(`Stack`, `Cell`, `Scroll`) take `children=[...]`.
+(`Stack`, `Cell`, `Scroll`, `Columns`, `Tabs`) take `children=[...]`.
 
 `tone` props take a colour role (`muted`, `faint`, `accent`, `tool`, `agent`, `running`,
 `attention`, `danger`, `ok`, …), a palette name or `#rrggbb`; see [Themes](themes.md).
@@ -49,6 +49,23 @@ Children seen through a window of `height` rows, following the end until scrolle
 ↑↓, pgup/pgdn and home/end scroll it as a dialog; in full screen the wheel scrolls a box in the
 transcript.
 
+### `Columns`
+
+Children side by side.
+
+| Prop | Meaning |
+| ---- | ------- |
+| `count` | columns per row, equal widths; further children start a new row (0: all in one row) |
+| `gap` | blank columns between them |
+| `min_width` | narrower than this, the columns stack instead |
+| `pack` | each child at its own width, wrapping when the row is full (a row of badges or buttons) |
+
+### `Tabs`
+
+A row of `labels` over its children, one pane each; only pane `active` is drawn, and controls
+in a closed pane cannot take focus. Focused, ←/→ switch; in full screen a click on a label
+does. Each switch emits `change` with the new index.
+
 ### `Divider`
 
 A horizontal rule; `label` is written into it.
@@ -57,13 +74,28 @@ A horizontal rule; `label` is written into it.
 
 ### `Text`
 
-Wrapped text in one style. `value`, `tone`, `bold`, `dim`, `italic`; `append` adds text.
+Wrapped text in one style. `value`, `tone`, `bold`, `dim`, `italic`; `append` adds text. With
+`link="https://…"` the whole text is a hyperlink (see [Links](#links)).
 
 ### `Markdown`
 
 Markdown with headings, lists, tables, code blocks, quotes and inline styles. `source` sets it;
 with `streaming=True`, `append` streams source in and only finished blocks are laid out as
-final.
+final. `[name](url)` shows `name` as a hyperlink, and bare `http(s)://` URLs in prose are
+links too (not in code).
+
+### Links
+
+Links are OSC 8 hyperlinks: the text is shown, the URL travels with it, and the terminal opens
+it (ctrl+click or cmd+click in most terminals). A link wrapped over several lines stays one
+link. In full screen the mouse is the app's, so a click on a link sends a `link` event with
+its `url`, and the app opens http, https and mailto URLs in the browser (`App(open_links=False)`
+turns that off; handle `link` yourself instead).
+
+Only http, https, mailto and file URLs become links; anything else, or a URL with control
+characters, stays text with the URL written after it. `App(links="text")` writes every link as
+`name (url)`, for terminals or multiplexers that drop OSC 8 (tmux without its `hyperlinks`
+feature); plain output does that by itself.
 
 ### `Code`
 
@@ -106,6 +138,20 @@ A multi-row line chart over the whole run, downsampled to the width. `label`, `h
 after `label`), or a dict such as `{"loss": 0.41, "ema": 0.43}` to feed several series at once;
 NaN leaves a gap.
 
+### `Bars`
+
+Horizontal bars in eighth-of-a-cell steps, one row per label; the bar room is capped at 48
+cells, so wide terminals do not stretch them.
+
+| Prop | Meaning |
+| ---- | ------- |
+| `labels` | one per row |
+| `series` | `[{"name", "data"}]`; with several, each label gets one row per series and a legend |
+| `stacked` | the series as coloured segments of one bar per label |
+| `max` | the full length (a gauge, shown as `value / max`); otherwise the longest bar fills |
+| `percent` | write each value as its share of the total, drawn against the total (a pie) |
+| `digits` | decimals; none for whole numbers, else two |
+
 ## Input and status rows
 
 ### `Composer`
@@ -128,6 +174,23 @@ Keys: enter submits; shift+enter, alt+enter, ctrl+j or `\` before enter insert a
 One focusable line (↓ from the composer reaches it). `label`, `value`, `hint`,
 `focused_hint`. With `segments=[{"label", "value"}]` it is several buttons in a row: ←/→ choose
 one while focused, and `select` carries that segment's value and index.
+
+### `Field`
+
+One form control, focusable inside the transcript: tab enters it, ↓↑ move between controls,
+esc hands the keys back. Each edit emits one `change` with the new value.
+
+| Prop | Meaning |
+| ---- | ------- |
+| `control` | `slider`, `number`, `radio`, `select`, `checkbox`, `toggle`, `rating`, `text`, `date` (typed, like `text`) |
+| `label` | shown before the control |
+| `value` | the current value |
+| `options` | `[{"label", "value"}]` (or strings) for `radio` and `select` |
+| `min`, `max`, `step` | for `slider` and `number` (←/→ step; shift+→ steps by ten) |
+| `placeholder` | for an empty `text` |
+| `disabled` | draw it without taking focus |
+
+Typing into a `number` replaces its value; a focused `text` field draws a caret.
 
 ### `Footer`
 

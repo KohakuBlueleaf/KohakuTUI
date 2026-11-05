@@ -65,7 +65,8 @@ ktui.App(mode="fullscreen")  # the alternate screen, with panels and mouse suppo
 `ctrl+t` switches at runtime; `app.set_mode("fullscreen")` does it from code, and a
 `mode_changed` event reports every switch. In inline mode the terminal keeps its own wheel
 scrolling and text selection; full screen captures the mouse (wheel, clicks, hover, drag to
-select and copy).
+select and copy). `app.copy(text)` puts text on the clipboard from code (OSC 52, so it works
+over SSH where the terminal supports it) and shows a short notice.
 
 ## Events
 
@@ -82,6 +83,7 @@ attributes or `ev.data`:
 | `interrupt` | ctrl+c with `interrupt="event"` | `count` |
 | `mode_changed` | inline ↔ full screen | `mode` |
 | `copy` | text selected in full screen | `text` |
+| `link` | a link clicked in full screen (opened in the browser unless `open_links=False`) | `url` |
 | `resize`, `ready`, `stopped`, `error` | the engine | |
 
 Three ways to receive them:
