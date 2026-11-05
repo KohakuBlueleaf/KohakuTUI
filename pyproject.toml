@@ -6,7 +6,7 @@ build-backend = "maturin"
 name = "kohakutui"
 # maturin reads the version from Cargo.toml.
 dynamic = ["version"]
-description = "Terminal UI engine in Rust, driven by a Python SDK: inline and full-screen TUIs for agents and training jobs"
+description = "Terminal UIs for Python rendered by Rust: inline and full-screen dashboards, monitors, interactive CLIs and chat front ends"
 authors = [
     { name = "Shih-Ying Yeh(KohakuBlueLeaf)", email = "apolloyeh0123@gmail.com" },
 ]
@@ -29,8 +29,14 @@ classifiers = [
     "Topic :: Software Development :: User Interfaces",
 ]
 
+[project.urls]
+Homepage = "https://github.com/KohakuBlueleaf/KohakuTUI"
+Documentation = "https://github.com/KohakuBlueleaf/KohakuTUI/tree/main/docs"
+Repository = "https://github.com/KohakuBlueleaf/KohakuTUI"
+Issues = "https://github.com/KohakuBlueleaf/KohakuTUI/issues"
+Changelog = "https://github.com/KohakuBlueleaf/KohakuTUI/releases"
+
 [project.optional-dependencies]
-tqdm = ["tqdm>=4.66"]
 # Testing and linting.
 dev = [
     "maturin>=1.7,<2",
