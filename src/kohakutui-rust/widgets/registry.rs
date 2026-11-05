@@ -2,7 +2,7 @@
 
 use super::{
     Button, Card, Cell, Chart, Code, Component, Composer, Confirm, Divider, Footer, Kv, Log,
-    Markdown, Picker, Progress, Prompt, Sparkline, Stack, Status, Table, Text, WidgetError,
+    Markdown, Picker, Progress, Prompt, Scroll, Sparkline, Stack, Status, Table, Text, WidgetError,
 };
 use crate::proto::Value;
 
@@ -28,6 +28,7 @@ pub const KINDS: &[&str] = &[
     "prompt",
     "card",
     "button",
+    "scroll",
 ];
 
 /// Builds a component of `kind` and applies its initial props.
@@ -53,6 +54,7 @@ pub fn build(kind: &str, props: &Value) -> Result<Box<dyn Component>, WidgetErro
         "prompt" => Box::<Prompt>::default(),
         "card" => Box::<Card>::default(),
         "button" => Box::<Button>::default(),
+        "scroll" => Box::<Scroll>::default(),
         other => return Err(WidgetError::UnknownKind(other.to_owned())),
     };
     comp.update(props)?;

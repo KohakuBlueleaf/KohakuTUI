@@ -26,6 +26,23 @@ class ControlMixin:
         """Switches between ``"inline"`` and ``"fullscreen"``."""
         self.send([{"op": "set_mode", "mode": mode}])
 
+    def set_theme(
+        self,
+        scheme: str = "kohaku-dark",
+        overrides: dict[str, str] | None = None,
+        truecolor: bool | None = None,
+    ) -> None:
+        """Switches the colour theme (see ``THEMES``).
+
+        ``overrides`` maps a role (``accent``, ``tool``, ``agent``, ``running``, ``attention``,
+        ``danger``, ``ok``, ``muted`` …) or a palette name (``iolite``, ``sapphire`` …) to a
+        ``#rrggbb`` colour or another name; ``truecolor`` forces 24-bit colour on or off.
+        """
+        op = {"op": "set_theme", "scheme": scheme, "overrides": dict(overrides or {})}
+        if truecolor is not None:
+            op["truecolor"] = truecolor
+        self.send([op])
+
     def bind(self, chord: str, action: str) -> None:
         """Makes ``chord`` (e.g. ``"ctrl+k"``) send an ``action`` event named ``action``."""
         self.send([{"op": "bind", "chord": chord, "action": action}])
@@ -109,6 +126,13 @@ class ControlMixin:
     def history(self) -> list[str]:
         """Scrollback then visible rows of a ``backend="test"`` app."""
         return self._session.history()
+
+    def screen_cells(self) -> list[list[tuple[str, str | None, str | None, list[str]]]]:
+        """Visible rows of a ``backend="test"`` app with their look: per row, runs of
+        ``(text, fg, bg, flags)``. Colours are None (the terminal default), an index ("0" to
+        "255") or ``"#rrggbb"``; flags name ``bold``, ``dim``, ``italic``, ``underline`` and
+        ``inverse``. Screenshots and snapshot tests read it."""
+        return self._session.screen_cells()
 
     def cursor(self) -> tuple[int, int] | None:
         """The test terminal's cursor as (row, col), None while hidden."""

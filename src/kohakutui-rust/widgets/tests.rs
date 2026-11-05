@@ -144,7 +144,9 @@ fn a_picker_selects_the_clicked_row_and_scrolls_with_the_wheel() {
 
     let wheel = Mouse { act: MouseAct::ScrollDown, row: 0, col: 0, width: 30 };
     p.on_mouse(&wheel, &mut out);
-    assert!(texts(p.as_ref(), 30).contains(&"› gamma".to_owned()));
+    // the selected row is a full-width bar: compare its text
+    let rows = texts(p.as_ref(), 30);
+    assert!(rows.iter().any(|r| r.trim_end() == "› gamma"), "{rows:?}");
 }
 
 #[test]
@@ -173,12 +175,39 @@ fn back_makes_left_close_a_picker_or_card_with_reason_back() {
     let mut p = build("picker", &map(vec![("items", items), ("back", true.into())])).unwrap();
     assert_eq!(keys(p.as_mut(), &left, TYPED), back);
     keys(p.as_mut(), &chars("ab"), TYPED);
-    assert!(keys(p.as_mut(), &left, TYPED).is_empty(), "inside the filter ← moves the caret");
+    // ← is never a caret key in a picker: with nothing to its left it goes back
+    assert_eq!(keys(p.as_mut(), &left, TYPED), back);
 
     let actions = Value::Array(vec!["x".into(), "y".into()]);
     let card_props = map(vec![("actions", actions), ("back", true.into())]);
     let mut card = build("card", &card_props).unwrap();
     assert_eq!(keys(card.as_mut(), &left, TYPED), back);
+}
+
+#[test]
+fn a_segmented_button_chooses_a_segment_with_left_and_right() {
+    let none = KeyModifiers::NONE;
+    let seg = |l: &str, v: &str| map(vec![("label", l.into()), ("value", v.into())]);
+    let segments = Value::Array(vec![
+        seg("● 2 creatures", "creatures"),
+        seg("! 1 waiting", "approvals"),
+    ]);
+    let mut b = build("button", &map(vec![("segments", segments.clone())])).unwrap();
+    assert_eq!(texts(b.as_ref(), 60), vec!["● 2 creatures  ·  ! 1 waiting"]);
+
+    // focused: the chosen segment is the highlighted one; → moves it, ← at the start stays
+    let focused = |b: &dyn Component| plain(&b.lines(60, &ctx().focused(true))[0]);
+    assert!(focused(b.as_ref()).starts_with(" ● 2 creatures "));
+    assert!(keys(b.as_mut(), &[(KeyCode::Right, none)], TYPED).is_empty());
+    assert!(focused(b.as_ref()).ends_with(" ! 1 waiting "), "{}", focused(b.as_ref()));
+    let out = keys(b.as_mut(), &[(KeyCode::Enter, none)], TYPED);
+    assert_eq!(out, vec![Emit::Select { index: 1, value: "approvals".into() }]);
+
+    // an update keeps the choice; a click picks the segment under it
+    b.update(&map(vec![("segments", segments)])).unwrap();
+    let mut out = Vec::new();
+    b.on_mouse(&Mouse { act: MouseAct::Click, row: 0, col: 3, width: 60 }, &mut out);
+    assert_eq!(out, vec![Emit::Select { index: 0, value: "creatures".into() }]);
 }
 
 #[test]
@@ -239,6 +268,34 @@ fn a_boxed_composer_draws_its_border_and_keeps_the_caret_inside() {
 }
 
 #[test]
+fn backslash_enter_inserts_a_newline_instead_of_submitting() {
+    let mut c = build("composer", &map(vec![])).unwrap();
+    let mut seq = chars("one\\");
+    seq.push((KeyCode::Enter, KeyModifiers::NONE));
+    seq.extend(chars("two"));
+    seq.push((KeyCode::Enter, KeyModifiers::NONE));
+    let out = keys(c.as_mut(), &seq, TYPED);
+    assert_eq!(out, vec![Emit::Submit("one\ntwo".into())]);
+}
+
+#[test]
+fn rich_submit_tells_ctrl_enter_from_enter() {
+    let mut c = build("composer", &map(vec![("rich_submit", true.into())])).unwrap();
+    let mut seq = chars("hi");
+    seq.push((KeyCode::Enter, KeyModifiers::CONTROL));
+    seq.extend(chars("yo"));
+    seq.push((KeyCode::Enter, KeyModifiers::NONE));
+    // ctrl+s is the same "send now" where a terminal cannot tell ctrl+enter apart
+    seq.extend(chars("go"));
+    seq.push((KeyCode::Char('s'), KeyModifiers::CONTROL));
+    let out = keys(c.as_mut(), &seq, TYPED);
+    let sub = |t: &str, now: bool| {
+        Emit::Submit(Value::Map(vec![("text".into(), t.into()), ("now".into(), now.into())]))
+    };
+    assert_eq!(out, vec![sub("hi", true), sub("yo", false), sub("go", true)]);
+}
+
+#[test]
 fn composer_submits_a_command_typed_in_full() {
     let cmds = Value::Array(vec![map(vec![("name", "model".into())]), "mode".into()]);
     let mut c = build("composer", &map(vec![("commands", cmds)])).unwrap();
@@ -277,6 +334,348 @@ fn picker_filters_fuzzily_and_selects_the_original_index() {
 }
 
 #[test]
+fn picker_rows_with_choices_group_open_on_current_and_cycle_options() {
+    let none = KeyModifiers::NONE;
+    let opts = |v: &[&str]| Value::Array(v.iter().map(|o| (*o).into()).collect());
+    let model = |name: &str, group: &str, current: bool, choices: Value| {
+        map(vec![
+            ("label", name.into()),
+            ("value", format!("{group}/{name}").as_str().into()),
+            ("group", group.into()),
+            ("current", current.into()),
+            ("choices", choices),
+            ("chosen", map(vec![("reasoning", "high".into())])),
+        ])
+    };
+    let groups = Value::Array(vec![
+        Value::Array(vec!["reasoning".into(), opts(&["low", "high", "max"])]),
+        Value::Array(vec!["speed".into(), opts(&["normal", "fast"])]),
+    ]);
+    let items = Value::Array(vec![
+        model("gpt-5.5", "openai", false, Value::Array(vec![])),
+        model("gpt-6-astra", "codex", true, groups),
+        model("gpt-5.4", "codex", false, Value::Array(vec![])),
+    ]);
+    let mut p = build("picker", &map(vec![("items", items)])).unwrap();
+
+    let shown = texts(p.as_ref(), 80);
+    assert!(
+        shown.contains(&"openai".to_owned()) && shown.contains(&"codex".to_owned()),
+        "{shown:?}"
+    );
+    let row = shown.iter().find(|l| l.contains("gpt-6-astra")).unwrap();
+    assert!(row.starts_with("› gpt-6-astra  [reasoning=high]  [speed=normal]"), "{row}");
+    let hint = shown.last().unwrap();
+    assert!(hint.contains("↑↓ move") && hint.contains("→ options"), "{hint}");
+
+    // → focuses the options; ↑↓ change the focused one, → moves to the next group
+    keys(p.as_mut(), &[(KeyCode::Right, none)], TYPED);
+    let hint = texts(p.as_ref(), 80).last().unwrap().clone();
+    assert!(hint.contains("↑↓ change reasoning") && hint.contains("← list"), "{hint}");
+    let seq = [
+        (KeyCode::Down, none),
+        (KeyCode::Right, none),
+        (KeyCode::Up, none),
+    ];
+    assert!(keys(p.as_mut(), &seq, TYPED).is_empty());
+    let out = keys(p.as_mut(), &[(KeyCode::Enter, none)], TYPED);
+    let chosen = map(vec![("reasoning", "max".into()), ("speed", "fast".into())]);
+    let value = Value::Map(vec![
+        ("value".into(), "codex/gpt-6-astra".into()),
+        ("choices".into(), chosen),
+    ]);
+    assert_eq!(out, vec![Emit::Select { index: 1, value }]);
+
+    // the filter matches the group too; plain rows still select their plain value
+    keys(p.as_mut(), &chars("open"), TYPED);
+    let out = keys(p.as_mut(), &[(KeyCode::Enter, none)], TYPED);
+    assert_eq!(out, vec![Emit::Select { index: 0, value: "openai/gpt-5.5".into() }]);
+}
+
+#[test]
+fn a_multi_picker_ticks_with_space_and_answers_every_ticked_value_in_order() {
+    let none = KeyModifiers::NONE;
+    let item = |v: &str, checked: bool| {
+        map(vec![
+            ("label", v.into()),
+            ("value", v.into()),
+            ("checked", checked.into()),
+        ])
+    };
+    let items = Value::Array(vec![item("red", false), item("green", true), item("blue", false)]);
+    let mut p = build("picker", &map(vec![("items", items), ("multi", true.into())])).unwrap();
+    let rows = texts(p.as_ref(), 40);
+    assert_eq!(rows[1].trim_end(), "› ☐ red");
+    assert_eq!(rows[2].trim_end(), "  ☑ green");
+    assert!(rows.last().unwrap().contains("space tick"));
+
+    // tick blue (after green in item order), untick nothing else; enter answers both
+    let seq = [
+        (KeyCode::Down, none),
+        (KeyCode::Down, none),
+        (KeyCode::Char(' '), none),
+    ];
+    assert!(keys(p.as_mut(), &seq, TYPED).is_empty(), "space ticks, it does not filter");
+    let out = keys(p.as_mut(), &[(KeyCode::Enter, none)], TYPED);
+    let picked = Value::Array(vec!["green".into(), "blue".into()]);
+    assert_eq!(out, vec![Emit::Select { index: 2, value: picked }]);
+
+    // nothing ticked: enter answers the highlighted row alone
+    let items = Value::Array(vec![item("a", false), item("b", false)]);
+    let mut p = build("picker", &map(vec![("items", items), ("multi", true.into())])).unwrap();
+    let out = keys(p.as_mut(), &[(KeyCode::Down, none), (KeyCode::Enter, none)], TYPED);
+    let only = Value::Array(vec!["b".into()]);
+    assert_eq!(out, vec![Emit::Select { index: 1, value: only }]);
+}
+
+#[test]
+fn the_focused_area_is_tinted_and_its_selected_row_is_a_selection_bar() {
+    use crate::text::theme;
+    let none = KeyModifiers::NONE;
+    let item = |name: &str, group: &str| {
+        map(vec![
+            ("label", name.into()),
+            ("value", name.into()),
+            ("group", group.into()),
+        ])
+    };
+    let items = Value::Array(vec![item("a1", "alpha"), item("a2", "alpha"), item("b1", "beta")]);
+    let props = map(vec![
+        ("items", items),
+        ("sidebar", true.into()),
+        ("max_visible", 3.into()),
+    ]);
+    let mut p = build("picker", &props).unwrap();
+    let tint = theme::focus_area().bg.expect("the default theme tints");
+    let bar = theme::selection_bg().bg.unwrap();
+    assert_ne!(tint, bar, "the area and the selection must look different");
+
+    // backgrounds of the sections column and of the list column on body row `r`
+    // the column fits the longest section name ("alpha" + 8); then "│ " separates the list
+    let side_w = 13;
+    let bgs = |p: &dyn Component, r: usize| {
+        let line = &p.lines(50, &ctx())[1 + r];
+        let (mut col, mut side, mut list) = (0usize, Vec::new(), Vec::new());
+        for span in &line.spans {
+            let w = crate::text::display_width(&span.content);
+            match col {
+                c if c < side_w => side.push(span.style.bg),
+                c if c >= side_w + 2 => list.push(span.style.bg),
+                _ => {}
+            }
+            col += w;
+        }
+        (side, list)
+    };
+
+    // list focused: the list is tinted, its selected row is the bar, the sections are plain
+    let (side, list) = bgs(p.as_ref(), 0);
+    assert!(side.iter().all(|b| b.is_none() || *b == Some(bar)), "{side:?}");
+    assert!(list.iter().skip(1).all(|b| *b == Some(bar)), "selected row: {list:?}");
+    let (_, list) = bgs(p.as_ref(), 1);
+    assert!(list.iter().skip(1).all(|b| *b == Some(tint)), "other rows: {list:?}");
+
+    // sections focused: now the column is tinted and the current section is the bar
+    keys(p.as_mut(), &[(KeyCode::Left, none)], TYPED);
+    let (side, list) = bgs(p.as_ref(), 1);
+    assert!(side.iter().all(|b| *b == Some(tint)), "{side:?}");
+    assert!(list.iter().all(|b| b.is_none()), "the list is no longer tinted: {list:?}");
+    let (side, _) = bgs(p.as_ref(), 0);
+    assert!(side.contains(&Some(bar)), "current section: {side:?}");
+
+    // rows past a short section keep the separator in its column, focused area or not
+    for zone_key in [KeyCode::Right, KeyCode::Left] {
+        keys(p.as_mut(), &[(zone_key, none)], TYPED);
+        let rows = texts(p.as_ref(), 50);
+        let cols: Vec<usize> = rows[1..4]
+            .iter()
+            .map(|r| r.chars().position(|c| c == '│').unwrap())
+            .collect();
+        assert!(cols.iter().all(|c| *c == side_w), "{rows:#?}");
+    }
+}
+
+#[test]
+fn a_sidebar_picker_lists_one_category_at_a_time_and_follows_the_filter() {
+    let none = KeyModifiers::NONE;
+    let opts = |v: &[&str]| Value::Array(v.iter().map(|o| (*o).into()).collect());
+    let item = |name: &str, group: &str, current: bool| {
+        let choices = Value::Array(vec![
+            Value::Array(vec!["reasoning".into(), opts(&["low", "high"])]),
+            Value::Array(vec!["speed".into(), opts(&["normal", "fast"])]),
+        ]);
+        map(vec![
+            ("label", name.into()),
+            ("value", format!("{group}/{name}").as_str().into()),
+            ("group", group.into()),
+            ("current", current.into()),
+            (
+                "choices",
+                if group == "codex" {
+                    choices
+                } else {
+                    Value::Array(vec![])
+                },
+            ),
+        ])
+    };
+    let items = Value::Array(vec![
+        item("gpt-5.5", "openai", false),
+        item("gpt-6-astra", "codex", true),
+        item("gpt-5.4", "codex", false),
+        item("claude-opus", "anthropic", false),
+    ]);
+    let props = map(vec![
+        ("items", items),
+        ("sidebar", true.into()),
+        ("max_visible", 4.into()),
+    ]);
+    let mut p = build("picker", &props).unwrap();
+
+    // opens on the current item's category; the column counts items per category
+    let shown = texts(p.as_ref(), 70);
+    let rows = &shown[1..5];
+    let first = rows[0].starts_with("  openai") && rows[0].contains("1 │ › gpt-6-astra");
+    assert!(first, "{shown:#?}");
+    let second = rows[1].starts_with("› codex") && rows[1].contains("2 │   gpt-5.4");
+    assert!(second, "{shown:#?}");
+    assert!(
+        shown
+            .iter()
+            .all(|l| !l.contains("gpt-5.5") && !l.contains("claude")),
+        "{shown:#?}"
+    );
+    assert_eq!(shown.len(), 6, "title-less: filter, 4 fixed rows, hint");
+    assert!(shown[5].contains("← sections") && shown[5].contains("→ options"), "{shown:#?}");
+
+    // ← focuses the sections: ↓ is the next section there, not the next item
+    keys(p.as_mut(), &[(KeyCode::Left, none)], TYPED);
+    let hint = texts(p.as_ref(), 70)[5].clone();
+    assert!(hint.contains("↑↓ section") && hint.contains("→ list"), "{hint}");
+    keys(p.as_mut(), &[(KeyCode::Down, none)], TYPED);
+    assert!(texts(p.as_ref(), 70)
+        .iter()
+        .any(|l| l.contains("claude-opus")));
+    keys(p.as_mut(), &[(KeyCode::Up, none)], TYPED);
+    // → back to the list, → into the options, → to the speed group, ↓ to fast
+    let seq = [
+        (KeyCode::Right, none),
+        (KeyCode::Right, none),
+        (KeyCode::Right, none),
+        (KeyCode::Down, none),
+        (KeyCode::Enter, none),
+    ];
+    let out = keys(p.as_mut(), &seq, TYPED);
+    let chosen = map(vec![("reasoning", "low".into()), ("speed", "fast".into())]);
+    let value = Value::Map(vec![
+        ("value".into(), "codex/gpt-6-astra".into()),
+        ("choices".into(), chosen),
+    ]);
+    assert_eq!(out, vec![Emit::Select { index: 1, value }]);
+
+    // typing always filters (and gives the keys to the list); with no match here the list
+    // moves to a category that has one
+    keys(p.as_mut(), &chars("opus"), TYPED);
+    assert!(texts(p.as_ref(), 70).last().unwrap().contains("↑↓ move"));
+    let shown = texts(p.as_ref(), 70);
+    assert!(shown.iter().any(|l| l.starts_with("› anthropic")), "{shown:#?}");
+    assert!(shown[1].contains("│ › claude-opus"), "{shown:#?}");
+    assert!(
+        shown
+            .iter()
+            .any(|l| l.starts_with("  codex") && l.contains(" 0 │")),
+        "{shown:#?}"
+    );
+
+    // `section` opens on a named section
+    let named = map(vec![
+        (
+            "items",
+            Value::Array(vec![item("x", "openai", false), item("y", "anthropic", false)]),
+        ),
+        ("sidebar", true.into()),
+        ("section", "anthropic".into()),
+    ]);
+    let q = build("picker", &named).unwrap();
+    assert!(texts(q.as_ref(), 70).iter().any(|l| l.contains("› y")));
+
+    // narrow: a tab row instead of the column
+    let narrow = texts(p.as_ref(), 40);
+    assert!(narrow[1].contains("openai · codex · anthropic"), "{narrow:#?}");
+}
+
+#[test]
+fn a_scroll_box_windows_its_content_follows_the_tail_and_maps_action_keys() {
+    use ratatui::text::Line;
+    let none = KeyModifiers::NONE;
+    let keys_map = map(vec![("k", "stop".into())]);
+    let props = map(vec![
+        ("height", 3.into()),
+        ("keys", keys_map),
+        ("dock", "input".into()),
+    ]);
+    let mut sc = build("scroll", &props).unwrap();
+    let content = |n: usize| {
+        (0..n)
+            .map(|i| Line::from(format!("line {i}")))
+            .collect::<Vec<_>>()
+    };
+    let shown = |sc: &dyn Component, n: usize| -> Vec<String> {
+        sc.frame_children(content(n), 60)
+            .iter()
+            .map(crate::text::plain)
+            .collect()
+    };
+
+    // follows the tail, with a hint naming the range, the keys and esc
+    let rows = shown(sc.as_ref(), 10);
+    assert_eq!(&rows[..3], ["line 7", "line 8", "line 9"]);
+    assert!(
+        rows[3].contains("8–10 of 10")
+            && rows[3].contains("k stop")
+            && rows[3].contains("esc close")
+    );
+
+    // ↑ scrolls back, home goes to the top, new content does not move a scrolled view
+    keys(sc.as_mut(), &[(KeyCode::Up, none)], TYPED);
+    assert_eq!(shown(sc.as_ref(), 10)[..3], ["line 6", "line 7", "line 8"]);
+    keys(sc.as_mut(), &[(KeyCode::Home, none)], TYPED);
+    assert_eq!(shown(sc.as_ref(), 10)[0], "line 0");
+    keys(sc.as_mut(), &[(KeyCode::End, none)], TYPED);
+    assert_eq!(
+        shown(sc.as_ref(), 12)[..3],
+        ["line 9", "line 10", "line 11"],
+        "back to following"
+    );
+
+    // a mapped key selects its action; an unmapped one is not consumed
+    let out = keys(sc.as_mut(), &chars("k"), TYPED);
+    assert_eq!(out, vec![Emit::Select { index: 0, value: "stop".into() }]);
+    assert!(!sc.on_input(
+        &Input::Key { code: KeyCode::Char('z'), mods: none, at: Instant::now() },
+        &mut Vec::new()
+    ));
+
+    // short content is shown whole, with no range in the hint
+    let rows = shown(sc.as_ref(), 2);
+    assert_eq!(&rows[..2], ["line 0", "line 1"]);
+    assert!(!rows[2].contains(" of "));
+}
+
+#[test]
+fn a_secret_prompt_draws_dots_and_answers_the_real_text() {
+    let props = map(vec![("question", "API key".into()), ("secret", true.into())]);
+    let mut p = build("prompt", &props).unwrap();
+    keys(p.as_mut(), &chars("sk-abc"), TYPED);
+    let shown = texts(p.as_ref(), 40);
+    assert_eq!(shown[1], "› ••••••");
+    assert!(!shown.iter().any(|l| l.contains("sk-abc")));
+    assert_eq!(p.cursor(40), Some((1, 8)));
+    let out = keys(p.as_mut(), &[(KeyCode::Enter, KeyModifiers::NONE)], TYPED);
+    assert_eq!(out, vec![Emit::Submit("sk-abc".into())]);
+}
+
+#[test]
 fn confirm_and_card_emit_their_choice() {
     let mut c = build("confirm", &map(vec![("question", "Go?".into())])).unwrap();
     assert_eq!(keys(c.as_mut(), &chars("y"), TYPED), vec![Emit::Submit(Value::Boolean(true))]);
@@ -312,6 +711,30 @@ fn sparkline_marks_nan_as_a_gap() {
         .unwrap();
     let line = &texts(s.as_ref(), 40)[0];
     assert!(line.starts_with("loss █·▁"), "{line:?}");
+}
+
+#[test]
+fn cell_header_shows_title_detail_and_only_meaningful_status() {
+    let props = map(vec![
+        ("role", "tool".into()),
+        ("title", "bash".into()),
+        ("detail", "pytest -q".into()),
+        ("status", "running".into()),
+        ("tone", "tool".into()),
+    ]);
+    let mut c = build("cell", &props).unwrap();
+    let header = texts(c.as_ref(), 40);
+    assert_eq!(header.len(), 1);
+    assert!(
+        header[0].ends_with("bash  pytest -q"),
+        "running is shown by the spinner: {header:?}"
+    );
+    c.update(&map(vec![("status", "waiting for approval".into())]))
+        .unwrap();
+    assert!(texts(c.as_ref(), 60)[0].starts_with("⚙ bash  pytest -q  waiting for approval"));
+    c.update(&map(vec![("status", "interrupted".into())]))
+        .unwrap();
+    assert_eq!(texts(c.as_ref(), 60)[0], "○ bash  pytest -q");
 }
 
 #[test]

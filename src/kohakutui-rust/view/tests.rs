@@ -63,8 +63,15 @@ fn key(code: KeyCode, mods: KeyModifiers) -> Input {
 fn a_streaming_cell_reaches_scrollback_line_by_line_and_exactly_once() {
     let mut m = chat();
     let c = ctx();
+    // the user line carries its band padding; compare the text
+    let trimmed = |lines: &[ratatui::text::Line<'static>]| -> Vec<String> {
+        texts(lines)
+            .iter()
+            .map(|l| l.trim_end().to_owned())
+            .collect()
+    };
     let mut flushed = take_flushable(&mut m, 40, &c);
-    assert_eq!(texts(&flushed), vec!["› hi there"], "the open cell has nothing stable yet");
+    assert_eq!(trimmed(&flushed), vec!["› hi there"], "the open cell has nothing stable yet");
 
     let reply = "First line\nsecond line\n\n- item one\n- item two\nlast par";
     for chunk in reply.as_bytes().chunks(5) {
@@ -80,8 +87,8 @@ fn a_streaming_cell_reaches_scrollback_line_by_line_and_exactly_once() {
     assert_eq!(m.flush_state(22), Some(FlushState::Full));
 
     let mut expected = vec!["› hi there".to_owned(), String::new()];
-    expected.extend(texts(&cell_parts(&m, 22, 40, &c).all()));
-    assert_eq!(texts(&flushed), expected);
+    expected.extend(trimmed(&cell_parts(&m, 22, 40, &c).all()));
+    assert_eq!(trimmed(&flushed), expected);
     assert_eq!(expected[2], "● First line");
 }
 
@@ -171,12 +178,323 @@ fn a_folded_cell_shows_one_summary_line_until_opened() {
     let c = ctx();
 
     let folded = texts(&cell_parts(&m, 20, 60, &c).all());
-    assert_eq!(folded, vec!["◆ grep", "  ⎿  3 matches  (ctrl+o to expand)"]);
+    assert_eq!(folded, vec!["◆ grep  ▸", "  ⎿  3 matches  (ctrl+o to expand)"]);
     let open = texts(&cell_parts(&m, 20, 60, &c.expanded(true)).all());
     assert!(open.iter().any(|l| l.contains("rg pattern")), "{open:?}");
 
     let flushed = texts(&take_flushable(&mut m, 60, &c));
     assert_eq!(flushed, folded, "scrollback gets the folded form");
+}
+
+#[test]
+fn user_messages_sit_on_a_full_width_band_and_others_do_not() {
+    let mut m = Model::new();
+    create(&mut m, 20, "cell", TRANSCRIPT, map(vec![("role", "user".into())]));
+    create(&mut m, 21, "text", 20, map(vec![("value", "fix the flaky test".into())]));
+    create(&mut m, 30, "cell", TRANSCRIPT, map(vec![("role", "assistant".into())]));
+    create(&mut m, 31, "text", 30, map(vec![("value", "on it".into())]));
+    let c = ctx();
+
+    let user = cell_parts(&m, 20, 40, &c).prefix;
+    assert_eq!(plain(&user[0]).trim_end(), "› fix the flaky test");
+    for line in &user {
+        let width: usize = line.spans.iter().map(|s| s.content.chars().count()).sum();
+        assert_eq!(width, 40, "padded to the full width");
+        assert!(line.spans.iter().all(|s| s.style.bg.is_some()), "every span carries the band");
+    }
+    let other = cell_parts(&m, 30, 40, &c).prefix;
+    assert!(other
+        .iter()
+        .flat_map(|l| &l.spans)
+        .all(|s| s.style.bg.is_none()));
+}
+
+#[test]
+fn a_docked_dialog_takes_the_input_box_place_and_keeps_every_key() {
+    let c = ctx();
+    let mut m = chat();
+    m.apply(Op::Seal { id: 22 }).unwrap();
+    create(&mut m, 40, "composer", BOTTOM, Value::Map(vec![]));
+    create(&mut m, 41, "footer", BOTTOM, map(vec![("left", "model x".into())]));
+    let items = Value::Array(vec!["alpha".into(), "beta".into()]);
+    let picker = map(vec![
+        ("items", items),
+        ("dock", "input".into()),
+        ("title", "Pick".into()),
+    ]);
+    create(&mut m, 50, "picker", OVERLAYS, picker);
+    take_flushable(&mut m, 60, &c);
+
+    // inline: the picker is drawn where the input and footer were, nothing above them
+    let mut vs = ViewState::new(Mode::Inline);
+    let screen = inline(&m, &vs, 60, 20, &c);
+    let rows = texts(&screen.lines);
+    assert!(!rows.iter().any(|r| r.contains("model x")), "the bottom region is replaced");
+    let title = rows.iter().position(|r| r.contains("Pick")).unwrap();
+    assert!(rows[title - 1].starts_with('╭'), "boxed like the input: {rows:#?}");
+    assert!(rows[title].ends_with(" │"), "closed on the right: {rows:#?}");
+    assert!(rows.last().unwrap().starts_with('╰'), "and it is the last thing on screen");
+
+    // keys stay in the picker even the ones it ignores; the composer never sees them
+    let mut events = Vec::new();
+    for ch in "bet".chars() {
+        handle_input(&mut m, &mut vs, key(KeyCode::Char(ch), KeyModifiers::NONE), &mut events);
+    }
+    handle_input(&mut m, &mut vs, key(KeyCode::Down, KeyModifiers::NONE), &mut events);
+    handle_input(&mut m, &mut vs, key(KeyCode::Enter, KeyModifiers::NONE), &mut events);
+    assert_eq!(
+        events,
+        vec![Event::Select { id: 50, index: 1, value: "beta".into() }],
+        "the filter took the letters and ↓ did not leave the dialog"
+    );
+
+    // a docked dialog that ignores letters and ↓ (a card) still keeps them from the hidden input
+    m.apply(Op::Remove { id: 50 }).unwrap();
+    let card = map(vec![("title", "Job".into()), ("dock", "input".into())]);
+    create(&mut m, 52, "card", OVERLAYS, card);
+    for code in [KeyCode::Char('x'), KeyCode::Down, KeyCode::Char('y')] {
+        handle_input(&mut m, &mut vs, key(code, KeyModifiers::NONE), &mut events);
+    }
+    assert_eq!(super::layout::input_target(&m, &vs), Some(52), "still the card's keys");
+    m.apply(Op::Remove { id: 52 }).unwrap();
+
+    // closing it gives the input box back, untouched
+    let rows = texts(&inline(&m, &vs, 60, 20, &c).lines);
+    assert!(rows.iter().any(|r| r.contains("model x")));
+    assert!(!rows.iter().any(|r| r.contains('x') && r.starts_with('›')), "{rows:#?}");
+    assert!(!rows.iter().any(|r| r.contains("› xy") || r.contains("› x")), "{rows:#?}");
+
+    // full screen: at the bottom, not a centred box
+    let picker = map(vec![
+        ("items", Value::Array(vec!["alpha".into()])),
+        ("dock", "input".into()),
+        ("title", "Pick".into()),
+    ]);
+    create(&mut m, 51, "picker", OVERLAYS, picker);
+    let mut vs = ViewState::new(Mode::Fullscreen);
+    let mut buf = Buffer::empty(Rect::new(0, 0, 60, 20));
+    fullscreen(&m, &mut vs, &mut buf, &c);
+    let rows: Vec<String> = (0..20)
+        .map(|y| (0..60).map(|x| buf[(x, y)].symbol()).collect::<String>())
+        .collect();
+    let at = rows.iter().position(|r| r.contains("Pick")).unwrap();
+    assert!(at > 12, "drawn in the bottom area: {rows:#?}");
+    assert!(!rows.iter().any(|r| r.starts_with('┌') || r.contains("┐")), "no modal box");
+}
+
+/// A batch cell titled "tool calls" with `n` calls (grep ×2, read, then edits), the second failed.
+fn batch(m: &mut Model, id: NodeId, n: usize) {
+    let props = map(vec![
+        ("role", "tool".into()),
+        ("batch", 3.into()),
+        ("title", "tool calls".into()),
+    ]);
+    create(m, id, "cell", TRANSCRIPT, props);
+    let names = ["grep", "read", "grep", "edit", "edit", "ls"];
+    for (i, name) in names.iter().enumerate().take(n) {
+        let kid = id + 1 + i as NodeId * 2;
+        let status = if i == 1 { "error" } else { "ok" };
+        let props = map(vec![
+            ("role", "tool".into()),
+            ("title", (*name).into()),
+            ("status", status.into()),
+            ("collapsed", true.into()),
+            ("summary", format!("result {i}").as_str().into()),
+        ]);
+        create(m, kid, "cell", id, props);
+        create(
+            m,
+            kid + 1,
+            "text",
+            kid,
+            map(vec![("value", format!("output {i}").as_str().into())]),
+        );
+    }
+}
+
+#[test]
+fn a_batch_is_invisible_under_its_threshold_and_folds_like_the_web_from_it() {
+    let c = ctx();
+    let mut m = Model::new();
+    batch(&mut m, 20, 2);
+    let small = texts(&cell_parts(&m, 20, 60, &c).all());
+    assert_eq!(
+        small,
+        vec![
+            "✓ grep  ▸",
+            "  ⎿  result 0  (ctrl+o to expand)",
+            "",
+            "✗ read  ▸",
+            "  ⎿  result 1  (ctrl+o to expand)"
+        ]
+    );
+
+    let mut m = Model::new();
+    batch(&mut m, 20, 6);
+    let parts = cell_parts(&m, 20, 80, &c);
+    let rows = texts(&parts.all());
+    assert_eq!(rows.len(), 1, "folded to its header: {rows:?}");
+    assert!(
+        rows[0].starts_with("✗ 6 tool calls  grep ×2, edit ×2, read, ls  1 ✗  ▸"),
+        "{rows:?}"
+    );
+    // the title is only the noun: an untitled group counts "items"
+    let mut plain = Model::new();
+    batch(&mut plain, 20, 6);
+    let untitled = map(vec![("title", Value::Nil)]);
+    plain.apply(Op::Update { id: 20, props: untitled }).unwrap();
+    let rows = texts(&cell_parts(&plain, 20, 80, &c).all());
+    assert!(rows[0].starts_with("✗ 6 items  grep ×2"), "{rows:?}");
+
+    // opened: every call under it, each folded on its own and listed as a header
+    m.toggle_open(20);
+    let parts = cell_parts(&m, 20, 80, &c);
+    assert_eq!(parts.heads.len(), 6, "one header per nested call");
+    let rows = texts(&parts.all());
+    assert!(rows[0].ends_with("▾"), "{rows:?}");
+    assert_eq!(rows[1], "  ✓ grep  ▸");
+    assert!(!rows.iter().any(|r| r.contains("output 0")));
+    m.toggle_open(21);
+    let rows = texts(&cell_parts(&m, 20, 80, &c).all());
+    assert!(rows.iter().any(|r| r.contains("output 0")), "a nested call opens on its own");
+}
+
+#[test]
+fn full_screen_hover_tints_navigation_opens_nested_calls_and_the_wheel_scrolls_boxes() {
+    let c = ctx();
+    let mut m = Model::new();
+    batch(&mut m, 20, 3);
+    let tool = map(vec![
+        ("role", "tool".into()),
+        ("title", "bash".into()),
+        ("status", "ok".into()),
+    ]);
+    create(&mut m, 40, "cell", TRANSCRIPT, tool);
+    create(&mut m, 41, "scroll", 40, map(vec![("height", 3.into())]));
+    let log = (0..10)
+        .map(|i| format!("log {i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    create(&mut m, 42, "text", 41, map(vec![("value", log.as_str().into())]));
+    for id in [20, 40] {
+        m.apply(Op::Seal { id }).unwrap();
+    }
+    let mut vs = ViewState::new(Mode::Fullscreen);
+    let draw = |m: &Model, vs: &mut ViewState| {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 60, 16));
+        fullscreen(m, vs, &mut buf, &c);
+        buf
+    };
+    let row_text = |buf: &Buffer, y: u16| (0..60).map(|x| buf[(x, y)].symbol()).collect::<String>();
+    let mut events = Vec::new();
+
+    // hover: the header under the pointer is tinted, and only a change redraws
+    let buf = draw(&m, &mut vs);
+    let (y, _, id) = vs.hits[0];
+    assert_eq!(id, 20);
+    assert!(handle_mouse(&mut m, &mut vs, MouseEventKind::Moved, 3, y, &mut events));
+    assert!(!handle_mouse(&mut m, &mut vs, MouseEventKind::Moved, 5, y, &mut events));
+    let buf2 = draw(&m, &mut vs);
+    assert_ne!(buf[(2, y)].bg, buf2[(2, y)].bg, "tinted");
+
+    // keyboard: ctrl+↑ focuses the last header (the batch), enter opens it, ↓ reaches a call
+    let ctrl = KeyModifiers::CONTROL;
+    let none = KeyModifiers::NONE;
+    handle_input(&mut m, &mut vs, key(KeyCode::Up, ctrl), &mut events);
+    assert_eq!(vs.nav, Some(20));
+    handle_input(&mut m, &mut vs, key(KeyCode::Enter, none), &mut events);
+    draw(&m, &mut vs);
+    assert_eq!(vs.heads, vec![20, 21, 23, 25], "the opened batch lists its calls");
+    handle_input(&mut m, &mut vs, key(KeyCode::Down, none), &mut events);
+    handle_input(&mut m, &mut vs, key(KeyCode::Char(' '), none), &mut events);
+    let buf = draw(&m, &mut vs);
+    assert!(
+        (0..16).any(|y| row_text(&buf, y).contains("output 0")),
+        "the nested call opened"
+    );
+    assert!(events.is_empty(), "navigation keys never reached an input");
+    handle_input(&mut m, &mut vs, key(KeyCode::Esc, none), &mut events);
+    assert_eq!(vs.nav, None);
+
+    // the wheel over the scroll box scrolls the box, not the transcript
+    let buf = draw(&m, &mut vs);
+    let (top, h, sid) = vs.scroll_hits[0];
+    assert_eq!((sid, h), (41, 4), "three rows and the hint");
+    assert!((0..16).any(|y| row_text(&buf, y).contains("log 9")));
+    let before = vs.scroll;
+    assert!(handle_mouse(&mut m, &mut vs, MouseEventKind::ScrollUp, 4, top, &mut events));
+    let buf = draw(&m, &mut vs);
+    assert_eq!(vs.scroll, before);
+    assert!((0..16).any(|y| row_text(&buf, y).contains("log 6")));
+    assert!(!(0..16).any(|y| row_text(&buf, y).contains("log 9")), "the box moved up three");
+    assert!((0..16).any(|y| row_text(&buf, y).contains("wheel scrolls in full screen")));
+
+    // a box at its top cannot move: the wheel goes on to the transcript
+    for _ in 0..3 {
+        handle_mouse(&mut m, &mut vs, MouseEventKind::ScrollUp, 4, top, &mut events);
+    }
+    assert!(vs.scroll > before, "the transcript scrolled once the box could not");
+
+    // a navigated header that goes away ends navigation; toggling a removed id is a no-op
+    vs.scroll = 0;
+    handle_input(&mut m, &mut vs, key(KeyCode::Up, ctrl), &mut events);
+    let nav = vs.nav.unwrap();
+    m.apply(Op::Remove { id: nav }).unwrap();
+    draw(&m, &mut vs);
+    assert_eq!(vs.nav, None);
+    m.toggle_open(nav);
+    assert!(!m.is_open(nav));
+}
+
+#[test]
+fn the_caret_of_an_input_in_a_scrolled_box_follows_the_window() {
+    let mut m = Model::new();
+    create(&mut m, 60, "scroll", OVERLAYS, map(vec![("height", 3.into())]));
+    let log = (0..6)
+        .map(|i| format!("line {i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    create(&mut m, 61, "text", 60, map(vec![("value", log.as_str().into())]));
+    create(&mut m, 62, "prompt", 60, map(vec![("question", "Q".into())]));
+    let mut cursor = None;
+    let lines = super::render::node_lines(&m, 60, 40, &ctx(), Some(62), &mut cursor);
+    let rows = texts(&lines);
+    // tail-following: line 5, the question, the input row, then the hint
+    let (r, _) = cursor.expect("the caret is inside the window");
+    assert!(rows[r as usize].starts_with('›'), "{rows:#?} caret row {r}");
+}
+
+#[test]
+fn ctrl_home_and_ctrl_end_jump_the_full_screen_transcript_past_a_focused_input() {
+    let mut m = chat();
+    let body = (0..40).map(|i| format!("line {i}\n")).collect::<String>();
+    m.apply(Op::Append { id: 23, data: body.as_str().into() })
+        .unwrap();
+    create(&mut m, 40, "composer", BOTTOM, Value::Map(vec![]));
+    let mut vs = ViewState::new(Mode::Fullscreen);
+    vs.focus = Some(40);
+    let c = ctx();
+    let draw = |m: &Model, vs: &mut ViewState| {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 40, 10));
+        fullscreen(m, vs, &mut buf, &c);
+        (0..10)
+            .map(|y| (0..40).map(|x| buf[(x, y)].symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let ctrl = KeyModifiers::CONTROL;
+    let mut events = Vec::new();
+
+    handle_input(&mut m, &mut vs, key(KeyCode::Home, ctrl), &mut events);
+    let top = draw(&m, &mut vs);
+    assert!(top.contains("line 0") && top.contains("ctrl+end"), "{top}");
+    assert!(vs.scroll > 0);
+
+    handle_input(&mut m, &mut vs, key(KeyCode::End, ctrl), &mut events);
+    let bottom = draw(&m, &mut vs);
+    assert_eq!(vs.scroll, 0);
+    assert!(bottom.contains("line 39") && !bottom.contains("line 0 "), "{bottom}");
+    assert!(events.is_empty(), "the composer never saw the keys");
 }
 
 #[test]
@@ -201,7 +519,7 @@ fn full_screen_clicks_open_one_folded_cell_and_ctrl_o_opens_all() {
     };
 
     let rows = draw(&m, &mut vs);
-    let second = rows.iter().rposition(|r| r == "◆ grep").unwrap() as u16;
+    let second = rows.iter().rposition(|r| r == "◆ grep  ▸").unwrap() as u16;
     assert_eq!(rows.iter().filter(|r| r.contains("rg pattern")).count(), 0);
 
     let click = MouseEventKind::Down(MouseButton::Left);
@@ -331,7 +649,7 @@ fn a_click_on_an_inline_dialog_reaches_the_row_it_landed_on() {
     let mut vs = ViewState::new(Mode::Inline);
     let screen = inline(&m, &vs, 40, 20, &ctx());
     let rows = texts(&screen.lines);
-    let beta = rows.iter().position(|r| r.ends_with("beta")).unwrap() as u16;
+    let beta = rows.iter().position(|r| r.contains("  beta ")).unwrap() as u16;
 
     // the viewport starts at screen row 3
     vs.overlay_hit = screen.overlay.map(|(id, r, c, w, h)| (id, 3 + r, c, w, h));
@@ -420,6 +738,9 @@ fn bound_chords_become_actions_and_ctrl_keys_have_builtin_meanings() {
 
     let t = handle_input(&mut m, &mut vs, key(KeyCode::Char('t'), ctrl), &mut events);
     assert_eq!(t, Outcome::ToggleMode);
+    events.clear();
+    handle_input(&mut m, &mut vs, key(KeyCode::Esc, KeyModifiers::NONE), &mut events);
+    assert_eq!(events, vec![Event::Action { name: "escape".into(), focus: None }]);
     let o = handle_input(&mut m, &mut vs, key(KeyCode::Char('o'), ctrl), &mut events);
     assert_eq!(o, Outcome::ExpandAll);
     let c = handle_input(&mut m, &mut vs, key(KeyCode::Char('c'), ctrl), &mut events);

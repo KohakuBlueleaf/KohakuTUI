@@ -1,6 +1,6 @@
 //! Tree storage and queries: lookup, children, ancestry, flush state and attach/detach.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::{FlushState, Model, Node, REGIONS, TRANSCRIPT};
 use crate::proto::NodeId;
@@ -29,7 +29,30 @@ impl Model {
                 },
             );
         }
-        Model { nodes, flush: HashMap::new() }
+        Model { nodes, flush: HashMap::new(), open: HashSet::new() }
+    }
+
+    /// Whether the user toggled this foldable node (opened it, or closed it under expand-all).
+    pub fn is_open(&self, id: NodeId) -> bool {
+        self.open.contains(&id)
+    }
+
+    /// Drops every toggle (ctrl+o starts from expand-all alone).
+    pub fn clear_open(&mut self) {
+        for id in std::mem::take(&mut self.open) {
+            self.bump(id);
+        }
+    }
+
+    /// Flips the node's toggle; its version (and its ancestors') moves so caches redraw it.
+    pub fn toggle_open(&mut self, id: NodeId) {
+        if !self.nodes.contains_key(&id) {
+            return;
+        }
+        if !self.open.remove(&id) {
+            self.open.insert(id);
+        }
+        self.bump(id);
     }
 
     pub fn node(&self, id: NodeId) -> Option<&Node> {
@@ -167,6 +190,7 @@ impl Model {
                 stack.extend(n.children);
             }
             self.flush.remove(&cur);
+            self.open.remove(&cur);
         }
     }
 

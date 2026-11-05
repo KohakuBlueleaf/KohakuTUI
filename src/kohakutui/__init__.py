@@ -5,7 +5,7 @@ this package is the Python SDK that describes what is on screen.
 """
 
 from kohakutui._rs import PROTOCOL, reset_terminal, version
-from kohakutui.app import App, Event
+from kohakutui.app import THEMES, App, Event
 from kohakutui.ui import (
     KV,
     Button,
@@ -24,6 +24,7 @@ from kohakutui.ui import (
     Picker,
     Progress,
     Prompt,
+    Scroll,
     Sparkline,
     Stack,
     Status,
@@ -36,6 +37,7 @@ __all__ = [
     "KV",
     "Button",
     "PROTOCOL",
+    "THEMES",
     "App",
     "Card",
     "Cell",
@@ -53,6 +55,7 @@ __all__ = [
     "Picker",
     "Progress",
     "Prompt",
+    "Scroll",
     "Sparkline",
     "Stack",
     "Status",

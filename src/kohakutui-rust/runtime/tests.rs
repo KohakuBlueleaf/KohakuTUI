@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use crossterm::event::{KeyCode, KeyModifiers};
+use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEventKind};
 
 use super::{Config, InputEv, Session};
 use crate::proto::value::map;
@@ -122,6 +122,53 @@ fn a_dialog_answers_by_select_and_ctrl_t_toggles_full_screen() {
     assert_eq!(events(&s), vec![Event::ModeChanged { mode: Mode::Fullscreen }]);
     let screen = s.screen().unwrap().screen();
     assert!(screen.iter().any(|l| l.contains("Pick")), "modal over full screen: {screen:#?}");
+}
+
+#[test]
+fn ctrl_o_is_a_round_trip_and_a_drag_in_full_screen_copies_what_it_covers() {
+    let s = session(40, 12);
+    events(&s);
+    let cell = map(vec![("role", "assistant".into())]);
+    let text = map(vec![("value", "copy me please".into())]);
+    s.apply(vec![
+        create(20, "cell", 1, cell),
+        create(21, "text", 20, text),
+        Op::Seal { id: 20 }.to_value(),
+    ])
+    .unwrap();
+    assert!(s.sync(WAIT));
+
+    // ctrl+o from inline: an expanded full-screen view; ctrl+o again: back to inline
+    let ctrl_o = || vec![key(KeyCode::Char('o'), KeyModifiers::CONTROL, 60)];
+    s.inject(ctrl_o()).unwrap();
+    assert!(s.sync(WAIT));
+    assert_eq!(events(&s), vec![Event::ModeChanged { mode: Mode::Fullscreen }]);
+    s.inject(ctrl_o()).unwrap();
+    assert!(s.sync(WAIT));
+    assert_eq!(events(&s), vec![Event::ModeChanged { mode: Mode::Inline }]);
+
+    // in full screen (ctrl+t), press, drag and release over "copy me": it is copied
+    s.inject(vec![key(KeyCode::Char('t'), KeyModifiers::CONTROL, 60)])
+        .unwrap();
+    assert!(s.sync(WAIT));
+    events(&s);
+    let screen = s.screen().unwrap().screen();
+    let row = screen.iter().position(|l| l.contains("copy me")).unwrap() as u16;
+    // a column, not a byte offset: the line starts with a multi-byte icon
+    let line = &screen[row as usize];
+    let col = line[..line.find("copy").unwrap()].chars().count() as u16;
+    let mouse = |kind, col| InputEv::Mouse { kind, col, row };
+    s.inject(vec![
+        mouse(MouseEventKind::Down(MouseButton::Left), col),
+        mouse(MouseEventKind::Drag(MouseButton::Left), col + 4),
+        mouse(MouseEventKind::Up(MouseButton::Left), col + 6),
+    ])
+    .unwrap();
+    assert!(s.sync(WAIT));
+    assert_eq!(events(&s), vec![Event::Copy { text: "copy me".into() }]);
+    assert!(s.sync(WAIT), "the toast's frame");
+    let screen = s.screen().unwrap().screen();
+    assert!(screen.iter().any(|l| l.contains("copied 7 characters")), "{screen:#?}");
 }
 
 #[test]

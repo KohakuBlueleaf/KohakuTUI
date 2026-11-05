@@ -320,7 +320,9 @@ class TestApp:
 
         app.inject({"key": "ctrl+o"})
         until(app, lambda: any("rg --json" in line for line in app.screen()))
-        header = app.screen().index("◆ grep")
+        screen = app.screen()
+        header = next(i for i, line in enumerate(screen) if line.startswith("◆ grep"))
+        assert screen[header].rstrip().endswith("▾"), "open, and marked as such"
         app.inject({"click": (2, header)})
         until(app, lambda: not any("rg --json" in line for line in app.screen()))
         app.inject({"click": (2, header)})
@@ -328,6 +330,33 @@ class TestApp:
 
         app.inject({"key": "ctrl+t"})
         until(app, lambda: not any("rg --json" in line for line in app.screen()))
+
+    def test_themes_switch_at_runtime_and_reject_unknown_schemes(self):
+        app = App(
+            backend="test", size=(40, 8), interrupt="event", theme="tokyo-night"
+        ).start()
+        errors = []
+        app.on("error")(errors.append)
+        app.set_theme("kohaku-light", {"accent": "#ff0000"}, truecolor=False)
+        app.set_theme("nope")
+        until(app, lambda: len(errors) == 1)
+        assert "unknown theme `nope`" in errors[0].message
+        app.stop()
+
+    def test_screen_cells_carry_the_look_of_every_run(self, app: App):
+        app.transcript.add(Cell(role="error", children=[Text("broken")])).seal()
+        until(app, lambda: any("broken" in line for line in app.history()))
+        row = next(
+            r for r in app.screen_cells() if "broken" in "".join(t for t, *_ in r)
+        )
+        assert "".join(t for t, *_ in row).rstrip().endswith("broken")
+        # the error line has a colour (a palette index here, "#rrggbb" in truecolor), the
+        # padding after it the terminal default
+        icon = next(run for run in row if run[0].strip())
+        assert icon[1] is not None and (
+            icon[1].isdigit() or icon[1].startswith("#")
+        ), row
+        assert row[-1][1] is None and row[-1][0].strip() == "", "trailing default cells"
 
     def test_card_in_the_transcript_is_static(self, app: App):
         app.transcript.add(Card(title="Result", body="- one\n- two")).seal()

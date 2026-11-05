@@ -7,7 +7,7 @@
 use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEventKind};
 
 use super::layout::{input_target, page_input};
-use super::ViewState;
+use super::{Selection, ViewState};
 use crate::model::{Model, BOTTOM, LIVE, PANELS};
 use crate::proto::{Event, Mode, NodeId};
 use crate::widgets::{Emit, Input, Mouse, MouseAct};
@@ -49,6 +49,24 @@ pub fn handle_input(
         if code == KeyCode::Char('o') && mods == KeyModifiers::CONTROL {
             return Outcome::ExpandAll;
         }
+        if let Some(outcome) = navigate(m, vs, code, mods) {
+            return outcome;
+        }
+        // ctrl+end / ctrl+home jump the full-screen transcript even while an input has focus
+        if vs.mode == Mode::Fullscreen && mods.contains(KeyModifiers::CONTROL) {
+            match code {
+                KeyCode::End => {
+                    vs.scroll = 0;
+                    return Outcome::Redraw;
+                }
+                KeyCode::Home => {
+                    // the layout clamps this to the top of the transcript
+                    vs.scroll = usize::MAX / 2;
+                    return Outcome::Redraw;
+                }
+                _ => {}
+            }
+        }
         if code == KeyCode::Esc {
             if let Some(top) = top.filter(|t| target == Some(*t)) {
                 events.push(Event::Close { id: top, reason: "escape".into() });
@@ -65,7 +83,9 @@ pub fn handle_input(
             }
             return Outcome::Redraw;
         }
-        if let Some(top) = top.filter(|o| *o == t && is_text(&input)) {
+        // a docked dialog has replaced the input box: its keys never leave it
+        let docked = super::layout::docked_overlay(m).is_some();
+        if let Some(top) = top.filter(|o| *o == t && is_text(&input) && !docked) {
             if let Some(page) = page_input(m, vs) {
                 vs.overlay_blur = Some(top);
                 deliver(m, page, &input, events);
@@ -75,7 +95,7 @@ pub fn handle_input(
 
         // ↓ that the dialog does not use leaves it for the input below
         let down = matches!(input, Input::Key { code: KeyCode::Down, .. });
-        if top == Some(t) && down && page_input(m, vs).is_some() {
+        if top == Some(t) && down && !docked && page_input(m, vs).is_some() {
             vs.overlay_blur = Some(t);
             return Outcome::Redraw;
         }
@@ -99,19 +119,24 @@ pub fn handle_input(
         }
     }
 
-    let Input::Key { code, mods, .. } = input else {
+    let Input::Key { code, .. } = input else {
         return Outcome::Nothing;
     };
 
     // tab or esc the input did not use hands the keys back to the dialog it left
-    if let Some(top) = top.filter(|o| vs.overlay_blur == Some(*o)) {
-        if matches!(code, KeyCode::Tab | KeyCode::Esc) {
-            let _ = top;
-            vs.overlay_blur = None;
-            return Outcome::Redraw;
-        }
+    if top.is_some_and(|o| vs.overlay_blur == Some(o))
+        && matches!(code, KeyCode::Tab | KeyCode::Esc)
+    {
+        vs.overlay_blur = None;
+        return Outcome::Redraw;
     }
-    builtin(m, vs, code, mods)
+
+    // a bare esc with no dialog is the application's (e.g. interrupt the running turn)
+    if code == KeyCode::Esc && top.is_none() {
+        events.push(Event::Action { name: "escape".into(), focus: target });
+        return Outcome::Redraw;
+    }
+    builtin(m, vs, code)
 }
 
 /// Gives `input` to node `id`; returns (handled, it submitted).
@@ -158,21 +183,127 @@ pub fn handle_mouse(
     if vs.mode != Mode::Fullscreen {
         return false;
     }
+    let header_at = |vs: &ViewState| {
+        vs.hits
+            .iter()
+            .find(|(y, w, _)| *y == row && col < *w)
+            .map(|&(_, _, id)| id)
+    };
     match kind {
-        MouseEventKind::ScrollUp => vs.scroll += WHEEL,
-        MouseEventKind::ScrollDown => vs.scroll = vs.scroll.saturating_sub(WHEEL),
+        // the pointer tints the header it is over; redraw only when that changes
+        MouseEventKind::Moved => {
+            let hover = header_at(vs);
+            if hover == vs.hover {
+                return false;
+            }
+            vs.hover = hover;
+        }
+        MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+            let up = kind == MouseEventKind::ScrollUp;
+            // over a scroll box the wheel scrolls the box, elsewhere the transcript
+            let boxed = vs
+                .scroll_hits
+                .iter()
+                .find(|(y, h, _)| row >= *y && row < y + h)
+                .map(|&(y, _, id)| (y, id));
+            if let Some((y, id)) = boxed {
+                let act = if up {
+                    MouseAct::ScrollUp
+                } else {
+                    MouseAct::ScrollDown
+                };
+                let mouse = Mouse { act, row: row - y, col, width: 0 };
+                let mut emits = Vec::new();
+                let moved = m
+                    .node_mut(id)
+                    .is_some_and(|n| n.comp.on_mouse(&mouse, &mut emits));
+                if moved {
+                    m.bump(id);
+                    return true;
+                }
+            }
+            if up {
+                vs.scroll += WHEEL;
+            } else {
+                vs.scroll = vs.scroll.saturating_sub(WHEEL);
+            }
+        }
+        // a press starts a possible selection (and toggles a header); a drag selects; the
+        // release copies what was selected
         MouseEventKind::Down(MouseButton::Left) => {
-            let hit = vs.hits.iter().find(|(y, w, _)| *y == row && col < *w);
-            let Some(&(_, _, id)) = hit else {
+            // only a visible selection needs a redraw when the press clears it
+            let had = vs.selection.take().is_some_and(|s| s.anchor != s.head);
+            vs.selection = Some(Selection {
+                anchor: (col, row),
+                head: (col, row),
+                done: false,
+                copied: false,
+            });
+            match header_at(vs) {
+                Some(id) => m.toggle_open(id),
+                None => return had,
+            }
+        }
+        MouseEventKind::Drag(MouseButton::Left) => {
+            let Some(sel) = vs.selection.as_mut().filter(|s| !s.done) else {
                 return false;
             };
-            if !vs.toggled.remove(&id) {
-                vs.toggled.insert(id);
+            if sel.head == (col, row) {
+                return false;
             }
+            sel.head = (col, row);
+        }
+        MouseEventKind::Up(MouseButton::Left) => {
+            let Some(sel) = vs.selection.as_mut() else {
+                return false;
+            };
+            if sel.anchor == sel.head {
+                // a plain click: nothing selected
+                vs.selection = None;
+                return false;
+            }
+            sel.head = (col, row);
+            sel.done = true;
         }
         _ => return false,
     }
     true
+}
+
+/// Transcript navigation in full screen: ctrl+↑ enters it on the last header; ↑↓ (j/k) move
+/// between foldable headers, enter or space toggles one, esc or any other key leaves it (the
+/// key then goes on as usual). None when the key is not navigation's.
+fn navigate(
+    m: &mut Model,
+    vs: &mut ViewState,
+    code: KeyCode,
+    mods: KeyModifiers,
+) -> Option<Outcome> {
+    if vs.mode != Mode::Fullscreen || m.top_overlay().is_some() {
+        vs.nav = None;
+        return None;
+    }
+    let ctrl = mods.contains(KeyModifiers::CONTROL);
+    let at = vs.nav.and_then(|n| vs.heads.iter().position(|h| *h == n));
+    match (vs.nav, code) {
+        (None, KeyCode::Up) if ctrl => vs.nav = vs.heads.last().copied(),
+        (None, _) => return None,
+        (Some(_), KeyCode::Up | KeyCode::Char('k')) => {
+            let i = at.map_or(vs.heads.len().saturating_sub(1), |i| i.saturating_sub(1));
+            vs.nav = vs.heads.get(i).copied();
+        }
+        (Some(_), KeyCode::Down | KeyCode::Char('j')) => {
+            let i = at.map_or(0, |i| (i + 1).min(vs.heads.len().saturating_sub(1)));
+            vs.nav = vs.heads.get(i).copied();
+        }
+        (Some(id), KeyCode::Enter | KeyCode::Char(' ')) => m.toggle_open(id),
+        (Some(_), KeyCode::Esc) => vs.nav = None,
+        (Some(_), _) => {
+            vs.nav = None;
+            return None;
+        }
+    }
+    Some(Outcome::Redraw)
 }
 
 fn overlay_mouse(
@@ -211,12 +342,11 @@ fn overlay_mouse(
     true
 }
 
-fn builtin(m: &Model, vs: &mut ViewState, code: KeyCode, mods: KeyModifiers) -> Outcome {
+fn builtin(m: &Model, vs: &mut ViewState, code: KeyCode) -> Outcome {
     const PAGE: usize = 10;
     match (code, vs.mode) {
         (KeyCode::PageUp, Mode::Fullscreen) => vs.scroll += PAGE,
         (KeyCode::PageDown, Mode::Fullscreen) => vs.scroll = vs.scroll.saturating_sub(PAGE),
-        (KeyCode::End, Mode::Fullscreen) if mods.contains(KeyModifiers::CONTROL) => vs.scroll = 0,
         // ↑/↓ that the focused input did not use step between inputs in layout order
         (KeyCode::Up | KeyCode::Down, _) if m.top_overlay() == vs.overlay_blur => {
             let inputs = focusable(m);

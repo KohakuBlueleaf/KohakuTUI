@@ -78,6 +78,20 @@ impl Op {
                 ("ttl_ms", (*ttl_ms).into()),
             ]),
             Op::Bell => map(vec![("op", "bell".into())]),
+            Op::SetTheme { scheme, overrides, truecolor } => map(vec![
+                ("op", "set_theme".into()),
+                ("scheme", scheme.as_str().into()),
+                (
+                    "overrides",
+                    Value::Map(
+                        overrides
+                            .iter()
+                            .map(|(k, v)| (k.as_str().into(), v.as_str().into()))
+                            .collect(),
+                    ),
+                ),
+                ("truecolor", truecolor.map_or(Value::Nil, Value::Boolean)),
+            ]),
         }
     }
 }
@@ -130,6 +144,9 @@ impl Event {
                 ("ev", "mode_changed".into()),
                 ("mode", mode.as_str().into()),
             ]),
+            Event::Copy { text } => {
+                map(vec![("ev", "copy".into()), ("text", text.as_str().into())])
+            }
             Event::Error { id, message } => map(vec![
                 ("ev", "error".into()),
                 ("id", id.map_or(Value::Nil, Value::from)),

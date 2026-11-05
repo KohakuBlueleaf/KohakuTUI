@@ -21,6 +21,7 @@ ANSWERS = {
     "prompt": {"submit", "close"},
     "confirm": {"submit", "close"},
     "card": {"select", "close"},
+    "scroll": {"select", "close"},
 }
 
 
@@ -74,13 +75,20 @@ class DialogsMixin:
             self._close(node_id)
 
     async def run_dialog_async(
-        self, spec: Component, timeout: float | None = None
+        self,
+        spec: Component,
+        timeout: float | None = None,
+        on_open: Callable[[Node], Any] | None = None,
     ) -> Any:
-        """Shows ``spec`` as an overlay and awaits the answer."""
+        """Shows ``spec`` as an overlay and awaits the answer; ``on_open`` as in ``run_dialog``
+        (keep the node to update a live dialog; it is removed when the dialog returns).
+        """
         if not self.running:
             return None
         waiter = Waiter(ANSWERS[spec.kind], asyncio.get_running_loop())
         node_id = self._open(spec, waiter)
+        if on_open is not None:
+            on_open(Node(self, node_id, spec.kind))
         try:
             return answer_of(await waiter.wait_async(timeout))
         finally:

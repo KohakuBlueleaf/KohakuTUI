@@ -11,6 +11,17 @@ from kohakutui.ui.node import Node
 
 TRANSCRIPT, LIVE, BOTTOM, PANELS, OVERLAYS = 1, 2, 3, 4, 5
 
+THEMES = (
+    "kohaku-dark",
+    "kohaku-light",
+    "terminal",
+    "colorblind-dark",
+    "colorblind-light",
+    "solarized-dark",
+    "solarized-light",
+    "tokyo-night",
+)
+
 
 class App(CoreMixin, ControlMixin, DialogsMixin, CaptureMixin):
     """A terminal UI: describe the screen with nodes, react to events.
@@ -20,7 +31,7 @@ class App(CoreMixin, ControlMixin, DialogsMixin, CaptureMixin):
     ``"plain"`` or ``"test"`` (an emulated ``size`` screen). ``interrupt`` decides ctrl+c:
     ``"raise"`` (KeyboardInterrupt in the main thread), ``"signal"`` (SIGINT, Unix),
     ``"event"`` (only an ``interrupt`` event) or ``"exit"``; ``"auto"`` is signal on Unix and
-    raise elsewhere.
+    raise elsewhere. ``theme`` is a scheme from ``THEMES`` applied at start.
     """
 
     def __init__(
@@ -31,6 +42,7 @@ class App(CoreMixin, ControlMixin, DialogsMixin, CaptureMixin):
         size: tuple[int, int] | None = None,
         interrupt: str = "auto",
         max_fps: int = 60,
+        theme: str | None = None,
     ):
         if interrupt == "auto":
             interrupt = "signal" if os.name == "posix" else "raise"
@@ -46,3 +58,12 @@ class App(CoreMixin, ControlMixin, DialogsMixin, CaptureMixin):
         self.bottom = Node(self, BOTTOM, "region")
         self.panels = Node(self, PANELS, "region")
         self.overlays = Node(self, OVERLAYS, "region")
+        self._theme = theme
+
+    def start(self) -> "App":
+        """Takes the terminal, starts the engine and the pump, and applies the theme."""
+        started = self.running
+        super().start()
+        if not started and self._theme:
+            self.set_theme(self._theme)
+        return self

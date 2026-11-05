@@ -28,11 +28,18 @@ pub struct Confirm {
     yes: String,
     no: String,
     choice: bool,
+    dock: bool,
 }
 
 impl Default for Confirm {
     fn default() -> Self {
-        Confirm { question: String::new(), yes: "Yes".into(), no: "No".into(), choice: false }
+        Confirm {
+            question: String::new(),
+            yes: "Yes".into(),
+            no: "No".into(),
+            choice: false,
+            dock: false,
+        }
     }
 }
 
@@ -43,6 +50,7 @@ impl Component for Confirm {
 
     fn update(&mut self, p: &Value) -> Result<(), WidgetError> {
         upd_str(p, "question", &mut self.question);
+        super::upd_dock(p, &mut self.dock);
         upd_bool(p, "default", &mut self.choice, false);
         if let Some(y) = str_of(p, "yes") {
             self.yes = y.to_owned();
@@ -103,6 +111,10 @@ impl Component for Confirm {
         true
     }
 
+    fn docked(&self) -> bool {
+        self.dock
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -115,11 +127,27 @@ pub struct Prompt {
     placeholder: Option<String>,
     multiline: bool,
     editor: TextEditor,
+    dock: bool,
+    /// Drawn as one • per character (API keys); the answer is the real text.
+    secret: bool,
 }
 
 impl Prompt {
     fn body(&self, width: u16) -> (Vec<Line<'static>>, (u16, u16)) {
         let avail = (width as usize).saturating_sub(2).max(1);
+        if self.secret {
+            let text = self.editor.text();
+            let before = text[..self.editor.cursor()].chars().count();
+            let shown = text.chars().count().min(avail.saturating_sub(1));
+            let mut spans = vec![Span::styled("› ", theme::accent())];
+            if text.is_empty() {
+                let ph = self.placeholder.clone().unwrap_or_default();
+                spans.push(Span::styled(ph, theme::muted()));
+            } else {
+                spans.push(Span::raw("•".repeat(shown)));
+            }
+            return (vec![Line::from(spans)], (0, 2 + before.min(shown) as u16));
+        }
         let (lines, caret) = self.editor.render(avail, Default::default());
         let mut out = Vec::new();
         for (i, line) in lines.into_iter().enumerate() {
@@ -151,8 +179,10 @@ impl Component for Prompt {
 
     fn update(&mut self, p: &Value) -> Result<(), WidgetError> {
         upd_str(p, "question", &mut self.question);
+        super::upd_dock(p, &mut self.dock);
         upd_opt_str(p, "placeholder", &mut self.placeholder);
         upd_bool(p, "multiline", &mut self.multiline, false);
+        upd_bool(p, "secret", &mut self.secret, false);
         if let Some(v) = get(p, "value") {
             self.editor.set(&display(v));
         }
@@ -183,6 +213,10 @@ impl Component for Prompt {
         let q = self.question_lines(width).len() as u16;
         let (_, (row, col)) = self.body(width);
         Some((q + row, col))
+    }
+
+    fn docked(&self) -> bool {
+        self.dock
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -247,6 +281,7 @@ pub struct Card {
     actions: Vec<(String, String)>,
     selected: usize,
     back: bool,
+    dock: bool,
 }
 
 impl Card {
@@ -297,6 +332,7 @@ impl Component for Card {
         upd_opt_str(p, "title", &mut self.title);
         upd_str(p, "body", &mut self.body);
         upd_bool(p, "back", &mut self.back, false);
+        super::upd_dock(p, &mut self.dock);
         if let Some(actions) = get(p, "actions") {
             self.actions = actions
                 .as_array()
@@ -387,6 +423,10 @@ impl Component for Card {
         self.selected = i;
         self.choose(i, out);
         true
+    }
+
+    fn docked(&self) -> bool {
+        self.dock
     }
 
     fn as_any(&self) -> &dyn Any {

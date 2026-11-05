@@ -150,6 +150,37 @@ impl PySession {
         Ok(self.test_screen()?.screen())
     }
 
+    /// The test terminal's visible rows as style runs: per row a list of
+    /// `(text, fg, bg, flags)`, colours None (default), an index string or `#rrggbb`, flags a
+    /// set of "bold", "dim", "italic", "underline", "inverse".
+    #[allow(clippy::type_complexity)]
+    fn screen_cells(
+        &self,
+    ) -> PyResult<Vec<Vec<(String, Option<String>, Option<String>, Vec<&'static str>)>>> {
+        let rows = self.test_screen()?.cells();
+        Ok(rows
+            .into_iter()
+            .map(|runs| {
+                runs.into_iter()
+                    .map(|run| {
+                        let s = run.style;
+                        let flags = [
+                            (s.bold, "bold"),
+                            (s.dim, "dim"),
+                            (s.italic, "italic"),
+                            (s.underline, "underline"),
+                            (s.inverse, "inverse"),
+                        ]
+                        .into_iter()
+                        .filter_map(|(on, name)| on.then_some(name))
+                        .collect();
+                        (run.text, s.fg, s.bg, flags)
+                    })
+                    .collect()
+            })
+            .collect())
+    }
+
     /// The test terminal's scrollback followed by its visible rows.
     fn history(&self) -> PyResult<Vec<String>> {
         Ok(self.test_screen()?.history())

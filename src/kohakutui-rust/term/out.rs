@@ -99,6 +99,36 @@ impl Write for TtyOut {
     }
 }
 
+/// A cell colour: None is the terminal's default, else an index (0-255) or `#rrggbb`.
+pub type CellColor = Option<String>;
+
+fn color(c: vt100::Color) -> CellColor {
+    match c {
+        vt100::Color::Default => None,
+        vt100::Color::Idx(i) => Some(i.to_string()),
+        vt100::Color::Rgb(r, g, b) => Some(format!("#{r:02x}{g:02x}{b:02x}")),
+    }
+}
+
+/// The look shared by a run of cells.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunStyle {
+    pub fg: CellColor,
+    pub bg: CellColor,
+    pub bold: bool,
+    pub dim: bool,
+    pub italic: bool,
+    pub underline: bool,
+    pub inverse: bool,
+}
+
+/// Neighbouring cells of one row that look the same.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StyledRun {
+    pub text: String,
+    pub style: RunStyle,
+}
+
 /// A shared in-memory terminal (vt100 emulator with scrollback), the test backend's screen.
 #[derive(Clone)]
 pub struct TestScreen(Arc<Mutex<vt100::Parser>>);
@@ -149,6 +179,45 @@ impl TestScreen {
             .rows(0, cols)
             .map(|r| r.trim_end().to_owned())
             .collect()
+    }
+
+    /// The visible rows as runs of one style each, for snapshots and screenshots.
+    pub fn cells(&self) -> Vec<Vec<StyledRun>> {
+        let p = self.lock();
+        let screen = p.screen();
+        let (rows, cols) = screen.size();
+        let mut out = Vec::with_capacity(rows.get() as usize);
+        for r in 0..rows.get() {
+            let mut runs: Vec<StyledRun> = Vec::new();
+            for c in 0..cols.get() {
+                let Some(cell) = screen.cell(r, c) else {
+                    continue;
+                };
+                if cell.is_wide_continuation() {
+                    continue;
+                }
+                let style = RunStyle {
+                    fg: color(cell.fgcolor()),
+                    bg: color(cell.bgcolor()),
+                    bold: cell.bold(),
+                    dim: cell.dim(),
+                    italic: cell.italic(),
+                    underline: cell.underline(),
+                    inverse: cell.inverse(),
+                };
+                let text = if cell.has_contents() {
+                    cell.contents()
+                } else {
+                    " "
+                };
+                match runs.last_mut() {
+                    Some(run) if run.style == style => run.text.push_str(text),
+                    _ => runs.push(StyledRun { text: text.to_owned(), style }),
+                }
+            }
+            out.push(runs);
+        }
+        out
     }
 
     /// Scrollback then the visible rows, trailing blank rows dropped.

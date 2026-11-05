@@ -193,8 +193,13 @@ class Cell(Component):
 
     ``stream_flush=True`` lets a streaming ``Markdown`` last child reach scrollback line by line
     before the cell seals. ``trailer`` is printed under the cell when it seals. A titled cell
-    with ``collapsed=True`` folds to its header and a ``summary`` line; ctrl+o or a click in
-    full screen opens it.
+    with ``collapsed=True`` folds to its header and a ``summary`` line; ctrl+o, a click or
+    keyboard navigation (ctrl+↑) in full screen opens it.
+
+    ``batch=n`` makes the cell a group of child cells: invisible below n children, from n on one
+    folded header with the count, member names and status counts, opening to the members. The
+    title is the noun: ``Cell(batch=3, title="tool calls")`` reads "5 tool calls", an untitled
+    group "5 items".
     """
 
     kind: ClassVar[str] = "cell"
@@ -207,18 +212,39 @@ class Cell(Component):
     icon: str | None = None
     collapsed: bool | None = None
     summary: str | None = None
+    tone: str | None = None
+    detail: str | None = None
+    batch: int | None = None
+
+
+@dataclass
+class Scroll(Component):
+    """Children seen through a window of ``height`` rows (0: all); ↑↓, pgup/pgdn, home/end and the
+    wheel scroll it, and at the bottom it follows new lines. ``keys`` maps characters to actions
+    (``{"k": "stop"}``): pressing one emits ``select`` with the action. Takes ``dock="input"`` as a
+    dialog; esc closes it then.
+    """
+
+    kind: ClassVar[str] = "scroll"
+    children: list[Component] = field(default_factory=list)
+    title: str | None = None
+    height: int | None = None
+    keys: dict[str, str] | None = None
+    dock: str | None = None
 
 
 @dataclass
 class Composer(Component):
     """The chat input: history, multi-line editing, a slash-command popup. Emits ``submit``.
 
-    ``boxed=True`` draws it inside a rounded border.
+    ``boxed=True`` draws it inside a rounded border. ``rich_submit=True`` makes ``submit`` carry
+    ``{"text": ..., "now": bool}``, ``now`` set by ctrl+enter.
     """
 
     kind: ClassVar[str] = "composer"
     placeholder: str | None = None
     boxed: bool | None = None
+    rich_submit: bool | None = None
     history: list[str] | None = None
     commands: list[Any] | None = None
     value: str | None = None
@@ -229,7 +255,20 @@ class Picker(Component):
     """A fuzzy-filtered list; items are strings or ``{"label", "value", "detail"}``.
 
     Enter or a click selects; the wheel moves. With ``back=True``, ← closes it with reason
-    ``"back"`` (one level up in a stack of dialogs).
+    ``"back"`` (one level up in a stack of dialogs). An item may also carry ``group`` (a section
+    header; the filter matches ``group/label``), ``current`` (✓, the list opens on it),
+    ``available=False`` (dimmed) and ``choices``: ``[[name, [options]], …]`` with an initial
+    ``chosen`` ``{name: option}``; selecting such a row gives
+    ``{"value": ..., "choices": {...}}``.
+
+    ``multi=True`` puts ☐/☑ on the rows (an item may start ``checked``): space ticks, and the
+    answer is the list of ticked values in item order (the highlighted one when none is).
+
+    Keys act on one focused area: the sections (``sidebar=True`` turns groups into a category
+    column, a tab row when narrow), the list, or the highlighted row's options. ←/→ (or tab /
+    shift+tab) move the focus across them, ↑↓ act on the focused one (section, item, option
+    value), enter selects, typing filters. ``dock="input"`` (every dialog kind) draws the
+    dialog where the input box is, in both modes, instead of over the content.
     """
 
     kind: ClassVar[str] = "picker"
@@ -238,6 +277,10 @@ class Picker(Component):
     placeholder: str | None = None
     max_visible: int | None = None
     back: bool | None = None
+    sidebar: bool | None = None
+    dock: str | None = None
+    multi: bool | None = None
+    section: str | None = None
 
 
 @dataclass
@@ -249,6 +292,7 @@ class Confirm(Component):
     default: bool | None = None
     yes: str | None = None
     no: str | None = None
+    dock: str | None = None
 
 
 @dataclass
@@ -260,6 +304,8 @@ class Prompt(Component):
     placeholder: str | None = None
     multiline: bool | None = None
     value: str | None = None
+    dock: str | None = None
+    secret: bool | None = None
 
 
 @dataclass
@@ -272,6 +318,7 @@ class Card(Component):
     body: str = ""
     actions: list[Any] | None = None
     back: bool | None = None
+    dock: str | None = None
 
 
 @dataclass
@@ -279,7 +326,9 @@ class Button(Component):
     """One focusable line (↓ from the input reaches it); enter, space or a click selects it.
 
     ``select`` carries ``value`` (the label when unset). ``hint`` follows the label while not
-    focused, ``focused_hint`` while focused.
+    focused, ``focused_hint`` while focused. With ``segments`` (``[{"label", "value"}]``) it is
+    several buttons in one row: ←/→ choose one while focused, and ``select`` carries that
+    segment's value and index.
     """
 
     kind: ClassVar[str] = "button"
@@ -287,3 +336,4 @@ class Button(Component):
     value: Any = None
     hint: str | None = None
     focused_hint: str | None = None
+    segments: list[Any] | None = None

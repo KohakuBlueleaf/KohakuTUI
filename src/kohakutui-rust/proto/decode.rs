@@ -51,6 +51,24 @@ impl Op {
                 },
             },
             "bell" => Op::Bell,
+            "set_theme" => Op::SetTheme {
+                scheme: req_str(v, "scheme")?.to_owned(),
+                overrides: match get(v, "overrides") {
+                    None | Some(Value::Nil) => Vec::new(),
+                    Some(Value::Map(entries)) => entries
+                        .iter()
+                        .map(|(k, val)| match (k.as_str(), val.as_str()) {
+                            (Some(k), Some(val)) => Ok((k.to_owned(), val.to_owned())),
+                            _ => Err(ProtoError::Type("overrides")),
+                        })
+                        .collect::<Result<_, _>>()?,
+                    Some(_) => return Err(ProtoError::Type("overrides")),
+                },
+                truecolor: match get(v, "truecolor") {
+                    None | Some(Value::Nil) => None,
+                    Some(b) => Some(b.as_bool().ok_or(ProtoError::Type("truecolor"))?),
+                },
+            },
             other => return Err(ProtoError::UnknownOp(other.to_owned())),
         })
     }

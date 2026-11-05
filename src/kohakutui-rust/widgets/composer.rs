@@ -34,6 +34,8 @@ pub struct Composer {
     popup_hidden: bool,
     last_char: Option<Instant>,
     boxed: bool,
+    /// Submit `{text, now}` instead of the text, `now` set by ctrl+enter.
+    rich_submit: bool,
 }
 
 impl Composer {
@@ -81,6 +83,10 @@ impl Composer {
     }
 
     fn submit(&mut self, out: &mut Vec<Emit>) {
+        self.submit_with(out, false);
+    }
+
+    fn submit_with(&mut self, out: &mut Vec<Emit>, now: bool) {
         let text = self.editor.text().to_owned();
         if text.trim().is_empty() {
             return;
@@ -91,7 +97,11 @@ impl Composer {
         self.hist_pos = None;
         self.editor.clear();
         self.popup_hidden = false;
-        out.push(Emit::Submit(Value::from(text)));
+        let value = match self.rich_submit {
+            true => Value::Map(vec![("text".into(), text.into()), ("now".into(), now.into())]),
+            false => Value::from(text),
+        };
+        out.push(Emit::Submit(value));
     }
 
     fn history_prev(&mut self) {
@@ -173,6 +183,7 @@ impl Component for Composer {
         upd_opt_str(p, "placeholder", &mut self.placeholder);
         upd_strings(p, "history", &mut self.history);
         upd_bool(p, "boxed", &mut self.boxed, false);
+        upd_bool(p, "rich_submit", &mut self.rich_submit, false);
         if let Some(cmds) = get(p, "commands") {
             self.commands = cmds
                 .as_array()
@@ -248,15 +259,25 @@ impl Component for Composer {
             KeyCode::Enter if mods.intersects(KeyModifiers::SHIFT | KeyModifiers::ALT) => {
                 self.editor.insert("\n")
             }
+            KeyCode::Enter if mods.contains(KeyModifiers::CONTROL) && !burst => {
+                self.submit_with(out, true)
+            }
             KeyCode::Enter if burst => {
                 self.editor.insert("\n");
                 self.last_char = Some(at);
+            }
+            // `\` + enter is a newline (Claude Code), for terminals that drop shift+enter
+            KeyCode::Enter if self.editor.text()[..self.editor.cursor()].ends_with('\\') => {
+                self.editor.backspace();
+                self.editor.insert("\n");
             }
             KeyCode::Enter if popup && !self.exact_command() => {
                 self.complete();
             }
             KeyCode::Enter => self.submit(out),
             KeyCode::Char('j') if ctrl => self.editor.insert("\n"),
+            // ctrl+enter's twin for terminals that send it as a plain enter or ctrl+j
+            KeyCode::Char('s') if ctrl && self.rich_submit => self.submit_with(out, true),
             KeyCode::Tab if popup => {
                 self.complete();
             }

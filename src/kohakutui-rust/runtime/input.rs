@@ -45,6 +45,9 @@ pub(crate) fn spawn(stop: Arc<AtomicBool>) -> (Receiver<InputEv>, Option<JoinHan
                             MouseEventKind::Down(MouseButton::Left)
                                 | MouseEventKind::ScrollUp
                                 | MouseEventKind::ScrollDown
+                                | MouseEventKind::Moved
+                                | MouseEventKind::Drag(MouseButton::Left)
+                                | MouseEventKind::Up(MouseButton::Left)
                         ) =>
                     {
                         InputEv::Mouse { kind: me.kind, col: me.column, row: me.row }

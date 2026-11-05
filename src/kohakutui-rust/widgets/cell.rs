@@ -1,6 +1,11 @@
 //! `cell`: one transcript entry. Its header carries a role icon, title and status; its children
 //! render indented under it; a trailer line is printed when it seals. A `collapsed` cell with a
-//! title folds to its header and one summary line until the full-screen view opens it.
+//! title folds to its header and one summary line until the full-screen view opens it; foldable
+//! headers carry ▸ (folded) or ▾ (open).
+//!
+//! A cell with `batch: n` groups its child cells (tool calls, jobs, files): below n children it is invisible
+//! and they render as if they were transcript entries themselves; from n on it folds them under
+//! one "n <title>" header ("n items" untitled), like a web chat's tool batch (see `view::render`).
 
 use std::any::Any;
 
@@ -49,6 +54,12 @@ pub struct Cell {
     pub collapsed: bool,
     /// The folded cell's one line; the trailer (once sealed) when unset.
     pub summary: Option<String>,
+    /// Title colour as a theme tone (`tool`, `agent`, `sapphire`, `#rrggbb`).
+    pub tone: Option<String>,
+    /// Muted text after the title, e.g. a tool's arguments.
+    pub detail: Option<String>,
+    /// Batch threshold: 0 is a plain cell.
+    pub batch: usize,
 }
 
 impl Default for Cell {
@@ -62,6 +73,9 @@ impl Default for Cell {
             icon: None,
             collapsed: false,
             summary: None,
+            tone: None,
+            detail: None,
+            batch: 0,
         }
     }
 }
@@ -73,7 +87,11 @@ impl Cell {
             return Some(Span::styled(icon.clone(), theme::accent()));
         }
         match self.status.as_str() {
-            "running" => return Some(Span::styled(theme::spinner(ctx.ms()), theme::accent())),
+            "running" => {
+                return Some(Span::styled(theme::spinner(ctx.ms()), theme::tone("running")))
+            }
+            s if s.starts_with("waiting") => return Some(Span::styled("⚙", theme::warn())),
+            "interrupted" => return Some(Span::styled("○", theme::warn())),
             "ok" | "done" => return Some(Span::styled("✓", theme::ok())),
             "error" | "failed" => return Some(Span::styled("✗", theme::danger())),
             _ => {}
@@ -97,8 +115,9 @@ impl Cell {
         }
     }
 
-    /// Title row: icon, bold title, status note. None without a title.
-    pub fn header(&self, width: u16, ctx: &Ctx) -> Vec<Line<'static>> {
+    /// Title row: icon, bold title, status note, and the fold marker when `fold` is given
+    /// (true: folded). None without a title.
+    pub fn header(&self, width: u16, ctx: &Ctx, fold: Option<bool>) -> Vec<Line<'static>> {
         let Some(title) = &self.title else {
             return Vec::new();
         };
@@ -107,14 +126,26 @@ impl Cell {
             spans.push(icon);
             spans.push(Span::raw(" "));
         }
-        let style = match self.role {
-            Role::User => theme::user(),
-            Role::Error => theme::danger().add_modifier(Modifier::BOLD),
+        let style = match (&self.tone, self.role) {
+            (Some(t), _) => theme::tone(t).add_modifier(Modifier::BOLD),
+            (None, Role::User) => theme::user(),
+            (None, Role::Error) => theme::danger().add_modifier(Modifier::BOLD),
             _ => theme::bold(),
         };
         spans.push(Span::styled(title.clone(), style));
-        if !self.status.is_empty() && !matches!(self.status.as_str(), "ok" | "done") {
+        if let Some(d) = &self.detail {
+            spans.push(Span::styled(format!("  {d}"), theme::muted()));
+        }
+        // statuses the icon already says are not repeated as text
+        let quiet = matches!(
+            self.status.as_str(),
+            "ok" | "done" | "running" | "interrupted" | "error" | "failed"
+        );
+        if !self.status.is_empty() && !quiet {
             spans.push(Span::styled(format!("  {}", self.status), theme::muted()));
+        }
+        if let Some(folded) = fold {
+            spans.push(Span::styled(fold_marker(folded), theme::muted()));
         }
         wrap_spans(&spans, width as usize)
     }
@@ -138,9 +169,10 @@ impl Cell {
         self.collapsed && self.title.is_some()
     }
 
-    /// Whether the cell renders folded in this context.
-    pub fn folded(&self, ctx: &Ctx) -> bool {
-        self.foldable() && !ctx.expand_all
+    /// Whether the cell renders folded: foldable, and not opened (expand-all or the user's
+    /// toggle, which inverts expand-all).
+    pub fn folded(&self, ctx: &Ctx, toggled: bool) -> bool {
+        self.foldable() && !(ctx.expand_all ^ toggled)
     }
 
     /// The folded cell's line under its header.
@@ -183,11 +215,14 @@ impl Component for Cell {
         upd_opt_str(p, "icon", &mut self.icon);
         upd_bool(p, "collapsed", &mut self.collapsed, false);
         upd_opt_str(p, "summary", &mut self.summary);
+        upd_opt_str(p, "tone", &mut self.tone);
+        upd_opt_str(p, "detail", &mut self.detail);
+        super::props::upd_usize(p, "batch", &mut self.batch, 0);
         Ok(())
     }
 
     fn lines(&self, width: u16, ctx: &Ctx) -> Vec<Line<'static>> {
-        self.header(width, ctx)
+        self.header(width, ctx, None)
     }
 
     fn container(&self) -> bool {
@@ -200,5 +235,14 @@ impl Component for Cell {
 
     fn as_any(&self) -> &dyn Any {
         self
+    }
+}
+
+/// The fold marker after a foldable header.
+pub fn fold_marker(folded: bool) -> &'static str {
+    if folded {
+        "  ▸"
+    } else {
+        "  ▾"
     }
 }

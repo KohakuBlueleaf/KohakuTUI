@@ -208,3 +208,37 @@ proptest! {
         prop_assert_eq!(starts, final_starts);
     }
 }
+
+#[test]
+fn themes_resolve_roles_gems_and_literals_and_reduce_to_256_colours() {
+    use super::theme::{parse_hex, Theme, SCHEMES};
+    use ratatui::style::Color;
+
+    for name in SCHEMES {
+        let t = Theme::scheme(name, true).unwrap();
+        for role in super::theme::ROLES {
+            assert!(t.color(role).is_some(), "{name} lacks {role}");
+        }
+    }
+    assert!(Theme::scheme("nope", true).is_none());
+
+    let dark = Theme::scheme("kohaku-dark", true).unwrap();
+    assert_eq!(dark.color("tool"), dark.color("sapphire"), "roles follow their gem");
+    assert_eq!(dark.color("iolite-light"), parse_hex("#DDD0F0"));
+    assert_eq!(dark.color("#102030"), Some(Color::Rgb(16, 32, 48)));
+    assert_eq!(dark.color("nonsense"), None);
+
+    let reduced = Theme::scheme("kohaku-dark", false).unwrap();
+    assert!(matches!(reduced.color("tool"), Some(Color::Indexed(_))));
+    assert_eq!(reduced.color("#000000"), Some(Color::Indexed(16)), "black is the cube origin");
+    assert_eq!(reduced.color("#808080"), Some(Color::Indexed(244)), "mid grey uses the ramp");
+
+    let custom = dark.with_overrides(&[
+        ("accent".into(), "coral".into()),
+        ("ok".into(), "#00ff00".into()),
+    ]);
+    assert_eq!(custom.color("accent"), custom.color("coral"));
+    assert_eq!(custom.color("ok"), Some(Color::Rgb(0, 255, 0)));
+    assert_eq!(parse_hex("#abc"), Some(Color::Rgb(0xaa, 0xbb, 0xcc)));
+    assert_eq!(parse_hex("#ab"), None);
+}

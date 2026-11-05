@@ -84,6 +84,13 @@ pub enum Op {
         ttl_ms: u32,
     },
     Bell,
+    /// Switches the theme: a built-in scheme, entries overriding it (role or palette name →
+    /// `#rrggbb` or another name), and forced truecolor on/off (detected when unset).
+    SetTheme {
+        scheme: String,
+        overrides: Vec<(String, String)>,
+        truecolor: Option<bool>,
+    },
 }
 
 /// One semantic event from the engine to Python. Raw keys never cross unless bound.
@@ -124,6 +131,10 @@ pub enum Event {
     },
     ModeChanged {
         mode: Mode,
+    },
+    /// Text the user selected in full screen, copied to the clipboard.
+    Copy {
+        text: String,
     },
     Error {
         id: Option<NodeId>,

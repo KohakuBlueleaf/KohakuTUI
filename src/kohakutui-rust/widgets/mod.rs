@@ -15,6 +15,7 @@ mod markdown;
 mod picker;
 mod props;
 mod registry;
+mod scroll;
 mod status;
 #[cfg(test)]
 mod tests;
@@ -30,7 +31,7 @@ use thiserror::Error;
 use crate::proto::Value;
 
 pub use button::Button;
-pub use cell::{Cell, Role};
+pub use cell::{fold_marker, Cell, Role};
 pub use chart::Chart;
 pub use composer::Composer;
 pub use data::{Footer, Kv, Table};
@@ -40,6 +41,7 @@ pub use layout::{Divider, Stack};
 pub use markdown::Markdown;
 pub use picker::Picker;
 pub use registry::{build, KINDS};
+pub use scroll::Scroll;
 pub use status::{Progress, Sparkline, Status};
 pub use text::{Code, Log, Text};
 
@@ -158,5 +160,24 @@ pub trait Component: Send + Any {
     fn animating(&self) -> bool {
         false
     }
+    /// As an overlay: drawn where the input box is (`dock: "input"`), not over the content.
+    fn docked(&self) -> bool {
+        false
+    }
+    /// The rows `frame_children` keeps out of `total` child lines: (start, end).
+    fn window(&self, total: usize) -> (usize, usize) {
+        (0, total)
+    }
+    /// A container's chance to window or decorate its children's lines (`scroll` clips them).
+    fn frame_children(&self, children: Vec<Line<'static>>, _width: u16) -> Vec<Line<'static>> {
+        children
+    }
     fn as_any(&self) -> &dyn Any;
+}
+
+/// Reads the `dock` prop into `flag`: `"input"` docks, anything else (or nil) does not.
+pub(crate) fn upd_dock(p: &Value, flag: &mut bool) {
+    if let Some(v) = crate::proto::value::get(p, "dock") {
+        *flag = v.as_str() == Some("input");
+    }
 }

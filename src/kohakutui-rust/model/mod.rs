@@ -6,7 +6,7 @@ mod apply;
 mod tests;
 mod tree;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use thiserror::Error;
 
@@ -52,6 +52,9 @@ pub enum FlushState {
 pub struct Model {
     nodes: HashMap<NodeId, Node>,
     flush: HashMap<NodeId, FlushState>,
+    /// Foldable nodes the user opened (or closed under expand-all): view state, kept here so
+    /// every level of the tree renders it.
+    open: HashSet<NodeId>,
 }
 
 /// An op the model refuses; the engine reports it as `Event::Error`.

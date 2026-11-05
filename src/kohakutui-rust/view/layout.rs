@@ -9,13 +9,13 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Clear, Widget};
+use ratatui::widgets::{Block, BorderType, Clear, Widget};
 
-use super::render::{cell_parts, node_lines, separator};
+use super::render::{cell_parts, foldable, node_lines, separator};
 use super::ViewState;
 use crate::model::{FlushState, Model, BOTTOM, LIVE, OVERLAYS, PANELS, TRANSCRIPT};
 use crate::proto::{Level, NodeId};
-use crate::text::{clip, theme};
+use crate::text::{clip, display_width, theme};
 use crate::widgets::{Cell, Ctx};
 
 /// The inline viewport: its lines, the caret within them, and where the top overlay's content
@@ -89,8 +89,8 @@ fn region(
 /// Shown in a dialog the user typed away from.
 const BLURRED_HINT: &str = "tab returns to this dialog";
 
-/// The overlay framed for inline mode: a rule above, a gutter, a rule below. Without the keys
-/// it is drawn muted, with a hint, and has no caret.
+/// The overlay in a rounded box like the boxed input: ╭─╮ │ … │ ╰─╯, content padded to the
+/// inner width. Without the keys it is drawn muted, with a hint, and has no caret.
 fn framed(
     m: &Model,
     id: NodeId,
@@ -98,8 +98,9 @@ fn framed(
     ctx: &Ctx,
     focused: bool,
 ) -> (Vec<Line<'static>>, Option<(u16, u16)>) {
-    let inner = width.saturating_sub(2).max(1);
-    let (mut lines, cursor) = region(m, id, inner, ctx, focused.then_some(id));
+    let w = width.max(5) as usize;
+    let inner = w - 4;
+    let (mut lines, cursor) = region(m, id, inner as u16, ctx, focused.then_some(id));
     if !focused {
         lines.push(Line::from(Span::styled(BLURRED_HINT, theme::muted())));
     }
@@ -108,14 +109,19 @@ fn framed(
     } else {
         theme::muted()
     };
-    let rule = Line::from(Span::styled("─".repeat(width as usize), edge));
-    let mut out = vec![rule.clone()];
+    let rule =
+        |l: &str, r: &str| Line::from(Span::styled(format!("{l}{}{r}", "─".repeat(w - 2)), edge));
+    let mut out = vec![rule("╭", "╮")];
     for l in lines {
+        let body = clip(l, inner);
+        let used: usize = body.spans.iter().map(|s| display_width(&s.content)).sum();
         let mut spans = vec![Span::styled("│ ", edge)];
-        spans.extend(l.spans);
-        out.push(clip(Line::from(spans), width as usize));
+        spans.extend(body.spans);
+        spans.push(Span::raw(" ".repeat(inner.saturating_sub(used))));
+        spans.push(Span::styled(" │", edge));
+        out.push(Line::from(spans));
     }
-    out.push(rule);
+    out.push(rule("╰", "╯"));
     (out, cursor.map(|(r, c)| (r + 1, c + 2)))
 }
 
@@ -164,19 +170,26 @@ pub fn inline(m: &Model, vs: &ViewState, width: u16, rows: u16, ctx: &Ctx) -> Sc
     }
     upper.extend(toasts);
 
-    // the overlay sits between the transcript and the bottom region and outranks the transcript
+    // the overlay sits between the transcript and the bottom region and outranks the transcript;
+    // a docked one takes the bottom region's place instead
+    let docked = docked_overlay(m);
     let (mut overlay, mut overlay_cursor) = match m.top_overlay() {
-        Some(top) => framed(m, top, width, ctx, target == Some(top)),
-        None => (Vec::new(), None),
+        Some(top) if docked.is_none() => framed(m, top, width, ctx, target == Some(top)),
+        _ => (Vec::new(), None),
     };
-    let (mut bottom, mut bottom_cursor) = region(m, BOTTOM, width, ctx, target);
+    let (mut bottom, mut bottom_cursor) = match docked {
+        Some(top) => framed(m, top, width, ctx, target == Some(top)),
+        None => region(m, BOTTOM, width, ctx, target),
+    };
     if overlay_cursor.is_some() {
         bottom_cursor = None;
     }
     keep_gap_above(&mut bottom, &mut bottom_cursor);
 
+    let mut bottom_cut = 0;
     if bottom.len() > max_h {
         let cut = bottom.len() - max_h;
+        bottom_cut = cut;
         bottom.drain(..cut);
         bottom_cursor = bottom_cursor.and_then(|(r, c)| r.checked_sub(cut as u16).map(|r| (r, c)));
     }
@@ -206,15 +219,29 @@ pub fn inline(m: &Model, vs: &ViewState, width: u16, rows: u16, ctx: &Ctx) -> Sc
         .map(|(r, c)| (overlay_at + r, c))
         .or(bottom_cursor.map(|(r, c)| (bottom_at + r, c)));
 
-    let overlay_hit = m.top_overlay().map(|top| {
-        let row = overlay_at as i32 + 1 - overlay_cut as i32;
-        (top, row, 2, width.saturating_sub(2).max(1), overlay_rows)
-    });
+    let overlay_hit = match docked {
+        // after the gap line and the top rule
+        Some(top) => {
+            let rows = bottom.len().saturating_sub(3) as u16;
+            let row = bottom_at as i32 + 2 - bottom_cut as i32;
+            Some((top, row, 2, width.saturating_sub(4).max(1), rows))
+        }
+        None => m.top_overlay().map(|top| {
+            let row = overlay_at as i32 + 1 - overlay_cut as i32;
+            (top, row, 2, width.saturating_sub(4).max(1), overlay_rows)
+        }),
+    };
 
     let mut lines = upper;
     lines.extend(overlay);
     lines.extend(bottom);
     Screen { lines, cursor, overlay: overlay_hit }
+}
+
+/// The top overlay when it asks to sit where the input box is.
+pub(crate) fn docked_overlay(m: &Model) -> Option<NodeId> {
+    m.top_overlay()
+        .filter(|t| m.node(*t).is_some_and(|n| n.comp.docked()))
 }
 
 /// The bottom region always keeps one blank line from whatever is above it.
@@ -225,48 +252,59 @@ fn keep_gap_above(bottom: &mut Vec<Line<'static>>, cursor: &mut Option<(u16, u16
     }
 }
 
-/// Every transcript line for full screen, plus the line index of each foldable cell's header.
-/// Sealed cells are cached by width, version and whether they are open.
+/// Every transcript line for full screen, with the foldable headers (line, node) and scroll
+/// boxes (first line, height, node) at every depth. Sealed cells are cached by width, version
+/// and expand-all; opening a nested header bumps its ancestors' versions.
+#[allow(clippy::type_complexity)]
 fn transcript_all(
     m: &Model,
     vs: &mut ViewState,
     width: u16,
     ctx: &Ctx,
-) -> (Vec<Line<'static>>, Vec<(usize, NodeId)>) {
+) -> (Vec<Line<'static>>, Vec<(usize, NodeId)>, Vec<(usize, usize, NodeId)>) {
+    let ctx = ctx.expanded(vs.expand_all);
     let mut out = Vec::new();
     let mut heads = Vec::new();
+    let mut scrolls = Vec::new();
     for &id in m.children(TRANSCRIPT) {
         out.extend(separator(m, id));
         let Some(node) = m.node(id) else { continue };
-        let open = vs.expand_all ^ vs.toggled.contains(&id);
-        let ctx = ctx.expanded(open);
-        if m.comp_as::<Cell>(id).is_some_and(|c| c.foldable()) {
-            heads.push((out.len(), id));
-        }
+        let base = out.len();
 
-        if node.sealed {
-            if let Some((w, v, o, lines)) = vs.cache.get(&id) {
-                if *w == width && *v == node.version && *o == open {
-                    out.extend(lines.iter().cloned());
-                    continue;
+        let cached = vs
+            .cache
+            .get(&id)
+            .filter(|c| node.sealed && c.0 == width && c.1 == node.version && c.2 == vs.expand_all);
+        let (lines, h, sc) = match cached {
+            Some(c) => (c.3.clone(), c.4.clone(), c.5.clone()),
+            None => {
+                let rendered = if m.comp_as::<Cell>(id).is_some() {
+                    let mut parts = cell_parts(m, id, width, &ctx);
+                    let mut h = std::mem::take(&mut parts.heads);
+                    let sc = std::mem::take(&mut parts.scrolls);
+                    if foldable(m, id) {
+                        h.insert(0, (0, id));
+                    }
+                    (parts.all(), h, sc)
+                } else {
+                    let mut sink = None;
+                    (node_lines(m, id, width, &ctx, None, &mut sink), Vec::new(), Vec::new())
+                };
+                if node.sealed {
+                    let (l, h, sc) = &rendered;
+                    let entry =
+                        (width, node.version, vs.expand_all, l.clone(), h.clone(), sc.clone());
+                    vs.cache.insert(id, entry);
                 }
+                rendered
             }
-        }
-        let lines = if m.comp_as::<Cell>(id).is_some() {
-            cell_parts(m, id, width, &ctx).all()
-        } else {
-            let mut sink = None;
-            node_lines(m, id, width, &ctx, None, &mut sink)
         };
-        if node.sealed {
-            vs.cache
-                .insert(id, (width, node.version, open, lines.clone()));
-        }
+        heads.extend(h.into_iter().map(|(i, n)| (base + i, n)));
+        scrolls.extend(sc.into_iter().map(|(i, len, n)| (base + i, len, n)));
         out.extend(lines);
     }
     vs.cache.retain(|id, _| m.contains(*id));
-    vs.toggled.retain(|id| m.contains(*id));
-    (out, heads)
+    (out, heads, scrolls)
 }
 
 fn draw_lines(buf: &mut Buffer, area: Rect, lines: &[Line<'static>]) {
@@ -286,9 +324,18 @@ pub fn fullscreen(
     let target = input_target(m, vs);
     let width = area.width;
 
-    let (mut bottom, mut bottom_cursor) = region(m, BOTTOM, width, ctx, target);
+    // a docked overlay replaces the bottom region, framed, and may take two thirds of the screen
+    let docked = docked_overlay(m);
+    let (mut bottom, mut bottom_cursor) = match docked {
+        Some(top) => framed(m, top, width, ctx, target == Some(top)),
+        None => region(m, BOTTOM, width, ctx, target),
+    };
     keep_gap_above(&mut bottom, &mut bottom_cursor);
-    bottom.truncate((area.height / 2) as usize);
+    let cap = match docked {
+        Some(_) => area.height as usize * 2 / 3,
+        None => (area.height / 2) as usize,
+    };
+    bottom.truncate(cap);
     let (mut live, _) = region(m, LIVE, width, ctx, None);
     live.truncate((area.height / 3) as usize);
     let toasts = toast_lines(vs, width);
@@ -304,21 +351,65 @@ pub fn fullscreen(
     };
     let main = Rect::new(area.x, area.y, width - panel_w, main_h);
 
-    let (lines, heads) = transcript_all(m, vs, main.width, ctx);
-    let max_scroll = lines.len().saturating_sub(main_h as usize);
+    let (lines, heads, scrolls) = transcript_all(m, vs, main.width, ctx);
+    let total = lines.len();
+    let h = main_h as usize;
+    // the header focused by keyboard navigation stays in view; a removed one ends navigation
+    if vs
+        .nav
+        .is_some_and(|n| !heads.iter().any(|(_, id)| *id == n))
+    {
+        vs.nav = None;
+    }
+    if let Some(&(i, _)) = vs.nav.and_then(|n| heads.iter().find(|(_, id)| *id == n)) {
+        let lowest = (total - i).saturating_sub(h);
+        vs.scroll = vs
+            .scroll
+            .clamp(lowest, (total - i).saturating_sub(1).max(lowest));
+    }
+    let max_scroll = total.saturating_sub(h);
     vs.scroll = vs.scroll.min(max_scroll);
-    let end = lines.len() - vs.scroll;
-    let start = end.saturating_sub(main_h as usize);
+    let end = total - vs.scroll;
+    let start = end.saturating_sub(h);
     draw_lines(buf, main, &lines[start..end]);
+    vs.heads = heads.iter().map(|(_, id)| *id).collect();
     vs.hits = heads
         .into_iter()
         .filter(|(i, _)| (start..end).contains(i))
         .map(|(i, id)| (main.y + (i - start) as u16, main.width, id))
         .collect();
+    vs.scroll_hits = scrolls
+        .into_iter()
+        .filter(|(i, len, _)| *i < end && i + len > start)
+        .map(|(i, len, id)| {
+            let top = i.max(start);
+            let bottom = (i + len).min(end);
+            (main.y + (top - start) as u16, (bottom - top) as u16, id)
+        })
+        .collect();
+    // the header under the pointer is tinted, the navigated one highlighted
+    for &(y, w, id) in &vs.hits {
+        let style = if vs.nav == Some(id) {
+            theme::selection()
+        } else if vs.hover == Some(id) {
+            theme::user_band()
+        } else {
+            continue;
+        };
+        buf.set_style(Rect::new(main.x, y, w, 1), style);
+    }
     if vs.scroll > 0 && main_h > 0 {
-        let note =
-            Line::from(Span::styled(format!(" ↓ {} more · pgdn ", vs.scroll), theme::selection()));
-        let y = main.y + main_h - 1;
+        let note = Line::from(Span::styled(
+            format!(" ↓ {} more · ctrl+end ", vs.scroll),
+            theme::selection(),
+        ));
+        // on the top row instead when the bottom one holds the navigated header
+        let bottom = main.y + main_h - 1;
+        let covers = vs
+            .hits
+            .iter()
+            .any(|&(y, _, id)| y == bottom && vs.nav == Some(id));
+        let y = if covers { main.y } else { bottom };
         buf.set_line(main.x, y, &note, main.width);
     }
 
@@ -349,7 +440,11 @@ pub fn fullscreen(
 
     let mut cursor = bottom_cursor.map(|(r, c)| (area.x + c, bottom_y + r));
     vs.overlay_hit = None;
-    if let Some(top) = m.top_overlay() {
+    if let Some(top) = docked {
+        let rows = bottom.len().saturating_sub(3) as u16;
+        vs.overlay_hit =
+            Some((top, bottom_y as i32 + 2, area.x + 2, width.saturating_sub(4), rows));
+    } else if let Some(top) = m.top_overlay() {
         let focused = target == Some(top);
         let (modal_cursor, inner) = modal(m, top, buf, ctx, focused);
         vs.overlay_hit = Some((top, inner.y as i32, inner.x, inner.width, inner.height));
@@ -357,7 +452,47 @@ pub fn fullscreen(
             cursor = modal_cursor;
         }
     }
+    select(vs, buf, area);
     cursor.filter(|(x, y)| *x < area.right() && *y < area.bottom())
+}
+
+/// The drag selection: its text is taken once, on release, from what this frame drew; then it
+/// is shown reversed until the next press.
+fn select(vs: &mut ViewState, buf: &mut Buffer, area: Rect) {
+    let Some(mut sel) = vs.selection else {
+        return;
+    };
+    let ((c0, r0), (c1, r1)) = sel.ordered();
+    let r1 = r1.min(area.bottom().saturating_sub(1));
+    if sel.done && !sel.copied {
+        let mut rows = Vec::new();
+        for y in r0..=r1 {
+            let from = if y == r0 { c0 } else { area.x };
+            let to = if y == r1 {
+                c1
+            } else {
+                area.right().saturating_sub(1)
+            };
+            let row: String = (from..=to.min(area.right().saturating_sub(1)))
+                .map(|x| buf[(x, y)].symbol())
+                .collect();
+            rows.push(row.trim_end().to_owned());
+        }
+        let text = rows.join("\n");
+        if !text.trim().is_empty() {
+            vs.copied = Some(text);
+        }
+        sel.copied = true;
+        vs.selection = Some(sel);
+    }
+    for y in r0..=r1 {
+        for x in area.x..area.right() {
+            if sel.contains(x, y) {
+                let cell = &mut buf[(x, y)];
+                cell.set_style(cell.style().add_modifier(Modifier::REVERSED));
+            }
+        }
+    }
 }
 
 /// Draws an overlay as a centered bordered box; returns its caret in screen coordinates and
@@ -385,7 +520,10 @@ fn modal(
         true => theme::accent().add_modifier(Modifier::BOLD),
         false => theme::muted(),
     };
-    Block::bordered().border_style(edge).render(rect, buf);
+    Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(edge)
+        .render(rect, buf);
 
     let inner = Rect::new(rect.x + 2, rect.y + 1, inner_w, h.saturating_sub(2));
     draw_lines(buf, inner, &lines);

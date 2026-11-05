@@ -82,6 +82,8 @@ struct Engine {
     syncs: Vec<Sender<()>>,
     interrupts: u8,
     last_interrupt: Option<Instant>,
+    /// Full screen was entered with ctrl+o from inline: the next ctrl+o goes back.
+    expand_return: bool,
     hard_exit_at: Option<Instant>,
     /// Clock for injected keys, so their spacing is exact whatever the test's real timing.
     virt: Instant,
@@ -105,6 +107,7 @@ impl Engine {
             syncs: Vec::new(),
             interrupts: 0,
             last_interrupt: None,
+            expand_return: false,
             hard_exit_at: None,
             virt: now,
         }
@@ -262,6 +265,17 @@ impl Engine {
             Op::Bell => {
                 let _ = self.term.bell();
             }
+            Op::SetTheme { scheme, overrides, truecolor } => {
+                let truecolor = truecolor.unwrap_or_else(crate::text::theme::detect_truecolor);
+                match crate::text::theme::Theme::scheme(&scheme, truecolor) {
+                    Some(t) => {
+                        crate::text::theme::set_current(t.with_overrides(&overrides));
+                        // cached full-screen lines still carry the old colours
+                        self.vs.cache.clear();
+                    }
+                    None => self.report(None, format!("unknown theme `{scheme}`")),
+                }
+            }
             Op::Focus { id } => match self.model.node(id) {
                 Some(n) if n.comp.focusable() && !n.sealed => self.vs.focus = Some(id),
                 Some(_) => self.report(Some(id), format!("node {id} cannot take focus")),
@@ -296,6 +310,7 @@ impl Engine {
         }
         self.vs.mode = mode;
         self.vs.scroll = 0;
+        self.expand_return = false;
         if mode == Mode::Inline {
             self.vs.expand_all = false;
         }
@@ -349,12 +364,17 @@ impl Engine {
                 self.set_mode(next);
             }
             Outcome::ExpandAll => {
-                self.vs.toggled.clear();
+                self.model.clear_open();
+                // from inline, ctrl+o is a round trip: an expanded full-screen view, then back
                 match self.vs.mode {
                     Mode::Inline => {
-                        self.vs.expand_all = true;
                         self.set_mode(Mode::Fullscreen);
+                        if self.vs.mode == Mode::Fullscreen {
+                            self.vs.expand_all = true;
+                            self.expand_return = true;
+                        }
                     }
+                    Mode::Fullscreen if self.expand_return => self.set_mode(Mode::Inline),
                     Mode::Fullscreen => self.vs.expand_all = !self.vs.expand_all,
                 }
                 self.dirty = true;
@@ -390,10 +410,11 @@ impl Engine {
     }
 
     fn draw(&mut self) {
+        // cleared first: whatever this frame queues for the next one (a copy's toast) stays
+        self.dirty = false;
         if let Err(e) = self.try_draw() {
             self.report(None, format!("draw failed: {e}"));
         }
-        self.dirty = false;
         self.next_draw = Instant::now() + self.frame;
         for done in self.syncs.drain(..) {
             let _ = done.send(());
@@ -439,6 +460,9 @@ impl Engine {
                 let mut buf = Buffer::empty(self.term.area());
                 let cursor = view::fullscreen(&self.model, &mut self.vs, &mut buf, &ctx);
                 self.term.draw(&buf, cursor)?;
+                if let Some(text) = self.vs.copied.take() {
+                    self.copy(text)?;
+                }
             }
         }
 
@@ -446,6 +470,20 @@ impl Engine {
         // scrolling and text selection at all times, dialog or not
         self.term.set_mouse(self.vs.mode == Mode::Fullscreen)?;
         self.term.end_frame()
+    }
+
+    /// Puts a full-screen selection on the clipboard (OSC 52), says so, and reports it.
+    fn copy(&mut self, text: String) -> std::io::Result<()> {
+        self.term.copy(&text)?;
+        let chars = text.chars().count();
+        self.vs.toasts.push(Toast {
+            text: format!("copied {chars} characters · shift+drag uses the terminal's selection"),
+            level: crate::proto::Level::Info,
+            until: Instant::now() + Duration::from_millis(2500),
+        });
+        self.emit(Event::Copy { text });
+        self.dirty = true;
+        Ok(())
     }
 
     /// Writes every remaining transcript line to scrollback and restores the terminal.
