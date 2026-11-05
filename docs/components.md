@@ -205,7 +205,7 @@ Drawn in full screen only, so an inline app can build them and lose nothing.
 A side column under `app.panels`: `side` `"left"` or `"right"`, `width` columns (at least
 `min`), `title`, `collapsed` to a one-column strip, `hidden` not laid out at all (its
 content hidden too). Children stack inside; the wheel scrolls
-it. The user drags its divider, double-clicks the divider to collapse it, clicks the strip
+it. With a title, a click on the title row (◂ / ▸) collapses it. The user drags its divider, double-clicks the divider to collapse it, clicks the strip
 to open it, and, with keys inside it, moves the divider with alt+←/→. Each change is a `pane`
 event (`id`, `width`, `collapsed`) for the app to remember. When the main pane would get
 narrower than 30 columns, panes collapse for that frame (right ones first). Panes take the

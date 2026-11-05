@@ -43,6 +43,8 @@ pub(crate) struct PaneHit {
     pub rows: Vec<(u16, u16, NodeId, u16)>,
     /// The screen column where children's content starts.
     pub content_x: u16,
+    /// The title row (a click there collapses the pane).
+    pub title_row: Option<u16>,
 }
 
 /// An in-progress divider drag.
@@ -111,6 +113,7 @@ pub(crate) fn split(m: &Model, area: Rect) -> (Rect, Vec<PaneHit>) {
             divider,
             rows: Vec::new(),
             content_x: x + 1,
+            title_row: None,
         });
         x += w;
     }
@@ -128,6 +131,7 @@ pub(crate) fn split(m: &Model, area: Rect) -> (Rect, Vec<PaneHit>) {
             divider: right,
             rows: Vec::new(),
             content_x: right + 2,
+            title_row: None,
         });
     }
     hits.extend(rights.into_iter().rev());
@@ -182,6 +186,10 @@ pub(crate) fn draw(
         buf.set_style(Rect::new(inner.x, y, inner.width, 1), style);
         let line = Line::from(Span::styled(format!(" {title}"), theme::bold()));
         buf.set_line(inner.x, y, &line, inner.width);
+        // the title row collapses the pane: its mark points the way it folds
+        let mark = if hit.left { "◂" } else { "▸" };
+        buf.set_string(inner.x + inner.width - 2, y, mark, theme::muted());
+        hit.title_row = Some(y);
         y += 1;
     }
     // one column of padding on the left, one on the right for the scroll marks
@@ -398,6 +406,10 @@ pub(crate) fn mouse(
         return Some(match kind {
             MouseEventKind::Down(MouseButton::Left) if hit.strip => {
                 set_pane(m, hit.id, None, Some(false), events);
+                true
+            }
+            MouseEventKind::Down(MouseButton::Left) if hit.title_row == Some(row) => {
+                set_pane(m, hit.id, None, Some(true), events);
                 true
             }
             MouseEventKind::Down(MouseButton::Left) if col == hit.divider => {

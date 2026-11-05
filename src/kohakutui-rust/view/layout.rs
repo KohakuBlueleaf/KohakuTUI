@@ -525,6 +525,12 @@ pub fn fullscreen(
             .iter()
             .any(|&(y, _, id)| y == bottom && vs.nav == Some(id));
         let y = if covers { main.y } else { bottom };
+        // the note's row is its own: what was drawn under it is cleared, not half covered
+        for x in main.x..main.x + main.width {
+            if let Some(cell) = buf.cell_mut((x, y)) {
+                cell.reset();
+            }
+        }
         buf.set_line(main.x, y, &note, main.width);
     }
 
