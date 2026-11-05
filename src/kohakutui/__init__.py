@@ -8,8 +8,10 @@ from kohakutui._rs import PROTOCOL, reset_terminal, version
 from kohakutui.app import App, Event
 from kohakutui.ui import (
     KV,
+    Button,
     Card,
     Cell,
+    Chart,
     Code,
     Component,
     Composer,
@@ -32,10 +34,12 @@ from kohakutui.ui import (
 
 __all__ = [
     "KV",
+    "Button",
     "PROTOCOL",
     "App",
     "Card",
     "Cell",
+    "Chart",
     "Code",
     "Component",
     "Composer",

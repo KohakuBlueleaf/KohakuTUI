@@ -125,6 +125,24 @@ class Sparkline(Component):
 
 
 @dataclass
+class Chart(Component):
+    """A multi-row line chart over the whole run, downsampled to the width.
+
+    ``append`` takes a number or a list (one series named after ``label``), or a dict
+    ``{"loss": 0.41, "ema": 0.43}`` to feed several series at once. NaN leaves a gap.
+    """
+
+    kind: ClassVar[str] = "chart"
+    label: str = ""
+    height: int | None = None
+    unit: str | None = None
+    digits: int | None = None
+    y_min: float | None = None
+    y_max: float | None = None
+    max_points: int | None = None
+
+
+@dataclass
 class KV(Component):
     """Aligned label/value rows, from ``[{"label", "value"}]`` or a dict."""
 
@@ -174,7 +192,9 @@ class Cell(Component):
     """A transcript entry: role icon, optional title, status, indented children.
 
     ``stream_flush=True`` lets a streaming ``Markdown`` last child reach scrollback line by line
-    before the cell seals. ``trailer`` is printed under the cell when it seals.
+    before the cell seals. ``trailer`` is printed under the cell when it seals. A titled cell
+    with ``collapsed=True`` folds to its header and a ``summary`` line; ctrl+o or a click in
+    full screen opens it.
     """
 
     kind: ClassVar[str] = "cell"
@@ -185,14 +205,20 @@ class Cell(Component):
     trailer: str | None = None
     stream_flush: bool | None = None
     icon: str | None = None
+    collapsed: bool | None = None
+    summary: str | None = None
 
 
 @dataclass
 class Composer(Component):
-    """The chat input: history, multi-line editing, a slash-command popup. Emits ``submit``."""
+    """The chat input: history, multi-line editing, a slash-command popup. Emits ``submit``.
+
+    ``boxed=True`` draws it inside a rounded border.
+    """
 
     kind: ClassVar[str] = "composer"
     placeholder: str | None = None
+    boxed: bool | None = None
     history: list[str] | None = None
     commands: list[Any] | None = None
     value: str | None = None
@@ -200,13 +226,18 @@ class Composer(Component):
 
 @dataclass
 class Picker(Component):
-    """A fuzzy-filtered list; items are strings or ``{"label", "value", "detail"}``."""
+    """A fuzzy-filtered list; items are strings or ``{"label", "value", "detail"}``.
+
+    Enter or a click selects; the wheel moves. With ``back=True``, ← closes it with reason
+    ``"back"`` (one level up in a stack of dialogs).
+    """
 
     kind: ClassVar[str] = "picker"
     items: list[Any] = field(default_factory=list)
     title: str | None = None
     placeholder: str | None = None
     max_visible: int | None = None
+    back: bool | None = None
 
 
 @dataclass
@@ -233,9 +264,26 @@ class Prompt(Component):
 
 @dataclass
 class Card(Component):
-    """A titled Markdown body with action buttons; choosing one selects its id."""
+    """A titled Markdown body with action buttons; choosing one (enter, its digit or a click)
+    selects its id. With ``back=True``, ← closes it with reason ``"back"``."""
 
     kind: ClassVar[str] = "card"
     title: str | None = None
     body: str = ""
     actions: list[Any] | None = None
+    back: bool | None = None
+
+
+@dataclass
+class Button(Component):
+    """One focusable line (↓ from the input reaches it); enter, space or a click selects it.
+
+    ``select`` carries ``value`` (the label when unset). ``hint`` follows the label while not
+    focused, ``focused_hint`` while focused.
+    """
+
+    kind: ClassVar[str] = "button"
+    label: str = ""
+    value: Any = None
+    hint: str | None = None
+    focused_hint: str | None = None

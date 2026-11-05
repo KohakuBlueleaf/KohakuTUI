@@ -2,8 +2,10 @@
 
 from kohakutui.ui.components import (
     KV,
+    Button,
     Card,
     Cell,
+    Chart,
     Code,
     Component,
     Composer,
@@ -26,8 +28,10 @@ from kohakutui.ui.widget import Widget
 
 __all__ = [
     "KV",
+    "Button",
     "Card",
     "Cell",
+    "Chart",
     "Code",
     "Component",
     "Composer",

@@ -7,10 +7,12 @@ terminal.
 
 import asyncio
 import threading
+from collections.abc import Callable
 from typing import Any
 
 from kohakutui.app.events import Event, Waiter
 from kohakutui.ui.components import Card, Component, Confirm, Picker, Prompt
+from kohakutui.ui.node import Node
 
 OVERLAYS = 5
 
@@ -41,8 +43,20 @@ class DialogsMixin:
         self.dispatcher.unregister(node_id)
         self.send([{"op": "remove", "id": node_id}])
 
-    def run_dialog(self, spec: Component, timeout: float | None = None) -> Any:
-        """Shows ``spec`` as an overlay and blocks until it is answered."""
+    def run_dialog(
+        self,
+        spec: Component,
+        timeout: float | None = None,
+        on_open: Callable[[Node], Any] | None = None,
+        event: bool = False,
+    ) -> Any:
+        """Shows ``spec`` as an overlay and blocks until it is answered.
+
+        ``on_open`` gets the dialog's node once it exists, so a caller can keep updating a
+        live dialog (a card following a task's output) while it waits. With ``event=True`` it
+        returns the answering ``Event`` itself (a ``close`` keeps its reason, such as
+        ``"back"``), None when cancelled by a stop or a timeout.
+        """
         if threading.current_thread() is self.pump_thread:
             raise RuntimeError(
                 "dialogs cannot block the event pump; use the async form or a thread"
@@ -51,8 +65,11 @@ class DialogsMixin:
             return None
         waiter = Waiter(ANSWERS[spec.kind])
         node_id = self._open(spec, waiter)
+        if on_open is not None:
+            on_open(Node(self, node_id, spec.kind))
         try:
-            return answer_of(waiter.wait(timeout))
+            ev = waiter.wait(timeout)
+            return ev if event else answer_of(ev)
         finally:
             self._close(node_id)
 
