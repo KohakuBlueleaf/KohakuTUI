@@ -107,6 +107,7 @@ answer = app.run_dialog(ktui.Scroll(
 | ctrl+↑ (full screen) | keyboard navigation over foldable headers: ↑↓ or j/k move, enter or space toggle, esc leaves |
 | mouse (full screen) | wheel scrolls (a scroll box under the pointer first), click toggles a header, hover highlights it, drag selects and copies |
 | F6 / shift+F6 (full screen) | move the keys to the next / previous area: document, head row, panes, bottom |
+| esc / click on the input (full screen) | with the keys in the head row or a pane, gives them back to the input |
 | alt+←/→ (full screen, keys in a pane) | move that pane's divider |
 | pane divider (full screen) | drag resizes, double-click collapses, a click on a collapsed strip opens it |
 

@@ -104,6 +104,9 @@ pub struct ViewState {
     /// The head row's children as drawn: (row, rows, node, first row shown), and its left edge.
     pub(crate) head_rows: Vec<(u16, u16, NodeId, u16)>,
     pub(crate) head_area: ratatui::layout::Rect,
+    /// The bottom region as drawn in full screen (clicks focus what is under them).
+    pub(crate) bottom_rows: Vec<(u16, u16, NodeId, u16)>,
+    pub(crate) bottom_area: ratatui::layout::Rect,
     /// The document drawn on the last frame: a change (shown, or the shown one removed) resets
     /// the per-document view state.
     pub(crate) shown: NodeId,
@@ -190,6 +193,8 @@ impl ViewState {
             divider_click: None,
             head_rows: Vec::new(),
             head_area: ratatui::layout::Rect::default(),
+            bottom_rows: Vec::new(),
+            bottom_area: ratatui::layout::Rect::default(),
             shown: crate::model::TRANSCRIPT,
             anchor: None,
             unseen: 0,

@@ -76,9 +76,9 @@ pub(crate) fn split(m: &Model, area: Rect) -> (Rect, Vec<PaneHit>) {
             (*id, p.side_left, w, p.collapsed)
         })
         .collect();
-    // a left pane adds a column of air before the transcript
+    // each side with a pane adds a column of air beside the chat column
     let used = |cols: &[(NodeId, bool, u16, bool)]| -> u16 {
-        let pad = u16::from(cols.iter().any(|c| c.1));
+        let pad = u16::from(cols.iter().any(|c| c.1)) + u16::from(cols.iter().any(|c| !c.1));
         cols.iter().map(|c| if c.3 { 1 } else { c.2 }).sum::<u16>() + pad
     };
     // too narrow: collapse right panes (innermost last) first, then left ones
@@ -130,9 +130,11 @@ pub(crate) fn split(m: &Model, area: Rect) -> (Rect, Vec<PaneHit>) {
         });
     }
     hits.extend(rights.into_iter().rev());
-    // a column of air between a left pane's divider and the transcript
+    // a column of air between each pane's divider and the chat column
     let pad = u16::from(hits.iter().any(|h| h.left));
-    let main = Rect::new(x + pad, area.y, right.saturating_sub(x + pad), area.height);
+    let pad_right = u16::from(hits.iter().any(|h| !h.left));
+    let w = right.saturating_sub(x + pad + pad_right);
+    let main = Rect::new(x + pad, area.y, w, area.height);
     (main, hits)
 }
 
@@ -225,6 +227,33 @@ pub(crate) fn stacked(
         lines.extend(got);
     }
     (lines, rows)
+}
+
+/// Like [`stacked`], with the caret of `target` (row, column) when it is a descendant.
+#[allow(clippy::type_complexity)]
+pub(crate) fn stacked_with_cursor(
+    m: &Model,
+    parent: NodeId,
+    width: u16,
+    ctx: &Ctx,
+    target: Option<NodeId>,
+) -> (Vec<Line<'static>>, Option<(u16, u16)>, Vec<(usize, usize, NodeId)>) {
+    let mut lines = Vec::new();
+    let mut rows = Vec::new();
+    let mut cursor = None;
+    for &child in m.children(parent) {
+        if m.hidden(child) {
+            continue;
+        }
+        let mut sink = None;
+        let got = node_lines(m, child, width, ctx, target, &mut sink);
+        if let Some((r, c)) = sink {
+            cursor = Some((lines.len() as u16 + r, c));
+        }
+        rows.push((lines.len(), got.len(), child));
+        lines.extend(got);
+    }
+    (lines, cursor, rows)
 }
 
 /// The part of each child's rows inside the window `[top, top + room)`, placed from screen
@@ -400,6 +429,16 @@ pub(crate) fn mouse(
             // a press inside a pane started no selection: its drag and release are no-ops
             _ => false,
         });
+    }
+    // a click on the input (or a row under it) gives it the keys
+    if inside(vs.bottom_area) {
+        if kind != MouseEventKind::Down(MouseButton::Left) {
+            return None;
+        }
+        vs.selection = None;
+        let at = node_at(&vs.bottom_rows, vs.bottom_area.x, col, row);
+        let width = vs.bottom_area.width;
+        return Some(click(m, vs, at, MouseAct::Click, width, events) || at.is_some());
     }
     let head = vs.head_area;
     if inside(head) {

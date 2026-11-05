@@ -141,9 +141,13 @@ pub fn handle_input(
         return Outcome::Redraw;
     }
 
-    // esc on a control in the transcript (a form in a reply) gives the keys back to the input
+    // esc on a control in the transcript (a form in a reply), the head row or a pane gives the
+    // keys back to the input
     if code == KeyCode::Esc && top.is_none() {
-        if let Some(t) = target.filter(|t| m.doc_of(*t) == Some(m.doc())) {
+        let away = |t: &NodeId| {
+            m.doc_of(*t) == Some(m.doc()) || matches!(m.region_of(*t), Some(HEAD | PANELS))
+        };
+        if let Some(t) = target.filter(away) {
             let back = m.subtree(BOTTOM).into_iter().find(|id| {
                 *id != t && m.node(*id).is_some_and(|n| !n.sealed && n.comp.focusable())
             });

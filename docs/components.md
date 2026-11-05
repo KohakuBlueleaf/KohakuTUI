@@ -207,7 +207,10 @@ A side column under `app.panels`: `side` `"left"` or `"right"`, `width` columns 
 it. The user drags its divider, double-clicks the divider to collapse it, clicks the strip
 to open it, and, with keys inside it, moves the divider with alt+←/→. Each change is a `pane`
 event (`id`, `width`, `collapsed`) for the app to remember. When the main pane would get
-narrower than 30 columns, panes collapse for that frame (right ones first).
+narrower than 30 columns, panes collapse for that frame (right ones first). Panes take the
+full height; the transcript, toasts, live rows and the bottom region (input, footer) share
+the column between them, and the row above the input is kept for the live rows, so a
+spinner coming and going does not move the transcript.
 
 ```python
 rail = app.panels.add(Pane(side="left", width=24, title="Agents"))

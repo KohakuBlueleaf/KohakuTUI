@@ -326,6 +326,8 @@ fn transcript_all(m: &Model, vs: &mut ViewState, width: u16, ctx: &Ctx) -> Trans
 }
 
 fn draw_lines(buf: &mut Buffer, area: Rect, lines: &[Line<'static>]) {
+    // rows past the screen (more fixed rows than it is tall) are not drawn
+    let area = area.intersection(buf.area);
     for (i, line) in lines.iter().take(area.height as usize).enumerate() {
         buf.set_line(area.x, area.y + i as u16, line, area.width);
     }
@@ -343,40 +345,58 @@ pub fn fullscreen(
     let width = area.width;
     vs.screen_width = width;
 
-    // a docked overlay replaces the bottom region, framed, and may take two thirds of the screen
-    let docked = docked_overlay(m);
-    let (mut bottom, mut bottom_cursor) = match docked {
-        Some(top) => framed(m, top, width, ctx, target == Some(top)),
-        None => region(m, BOTTOM, width, ctx, target),
-    };
-    keep_gap_above(&mut bottom, &mut bottom_cursor);
-    let cap = match docked {
-        Some(_) => area.height as usize * 2 / 3,
-        None => (area.height / 2) as usize,
-    };
-    bottom.truncate(cap);
-    let (mut live, _) = region(m, LIVE, width, ctx, None);
-    live.truncate((area.height / 3) as usize);
-    let toasts = toast_lines(vs, width);
-    let fixed = (bottom.len() + live.len() + toasts.len()) as u16;
-    let main_h = area.height.saturating_sub(fixed);
-
-    // panes around the transcript; without any, other panel content takes the right third
-    let body_h = main_h;
-    let body = Rect::new(area.x, area.y, width, body_h);
+    // panes take the full height; the chat column between them holds the head row, the
+    // transcript, the toasts, the live rows and the input
     let pane_list = !panes::panes(m).is_empty();
-    let (mut main, mut pane_hits) = if pane_list {
-        panes::split(m, body)
+    let (mut column, mut pane_hits) = if pane_list {
+        panes::split(m, area)
     } else {
-        (body, Vec::new())
+        (area, Vec::new())
     };
+    // without panes, other panel content takes the right third
     let has_panels = !pane_list && !m.children(PANELS).is_empty() && width >= 60;
     let panel_w = if has_panels {
         (width / 3).clamp(24, 60)
     } else {
         0
     };
-    main.width -= panel_w;
+    column.width -= panel_w;
+    let cw = column.width;
+
+    // a docked overlay replaces the bottom region, framed, and may take two thirds of the screen
+    let docked = docked_overlay(m);
+    let (mut bottom, mut bottom_cursor, bottom_rows) = match docked {
+        Some(top) => {
+            let (lines, cursor) = framed(m, top, cw, ctx, target == Some(top));
+            (lines, cursor, Vec::new())
+        }
+        None => panes::stacked_with_cursor(m, BOTTOM, cw, ctx, target),
+    };
+    let (mut live, _) = region(m, LIVE, cw, ctx, None);
+    live.truncate((area.height / 3) as usize);
+    // the row above the input is kept for the live rows, so a spinner coming and going does
+    // not move the transcript: with nothing live it is the blank gap above the input
+    let gap = live.is_empty();
+    if gap {
+        keep_gap_above(&mut bottom, &mut bottom_cursor);
+    }
+    let cap = match docked {
+        Some(_) => area.height as usize * 2 / 3,
+        None => (area.height / 2) as usize,
+    };
+    bottom.truncate(cap);
+    // a caret cut off with its rows is not shown
+    bottom_cursor = bottom_cursor.filter(|(r, _)| (*r as usize) < bottom.len());
+    // short of rows, the input keeps its own first, then the live rows, then the toasts
+    let mut room = (column.height as usize).saturating_sub(bottom.len());
+    live.truncate(room);
+    room -= live.len();
+    let mut toasts = toast_lines(vs, cw);
+    toasts.truncate(room);
+    let fixed = (bottom.len() + live.len() + toasts.len()) as u16;
+    let main_h = column.height.saturating_sub(fixed);
+    let main = Rect::new(column.x, column.y, cw, main_h);
+    let below = column.y + main_h;
 
     // the head row (a tab strip) over the transcript
     let (head, head_rows) = panes::stacked(m, HEAD, main.width, ctx, target);
@@ -496,7 +516,7 @@ pub fn fullscreen(
     }
     vs.pane_hits = pane_hits;
     if has_panels {
-        let pane = Rect::new(main.x + main.width, area.y, panel_w, body_h);
+        let pane = Rect::new(column.x + cw, area.y, panel_w, area.height);
         let inner = pane.width.saturating_sub(2);
         let mut sink = None;
         let mut panel_lines = Vec::new();
@@ -512,20 +532,24 @@ pub fn fullscreen(
         draw_lines(buf, Rect::new(pane.x + 2, pane.y, inner, pane.height), &panel_lines);
     }
 
-    let mut y = area.y + main_h;
-    for group in [&live, &toasts] {
-        draw_lines(buf, Rect::new(area.x, y, width, group.len() as u16), group);
+    // under the transcript, in the chat column: toasts, the live rows, then the input
+    let mut y = below;
+    for group in [&toasts, &live] {
+        draw_lines(buf, Rect::new(column.x, y, cw, group.len() as u16), group);
         y += group.len() as u16;
     }
     let bottom_y = y;
-    draw_lines(buf, Rect::new(area.x, y, width, bottom.len() as u16), &bottom);
+    draw_lines(buf, Rect::new(column.x, y, cw, bottom.len() as u16), &bottom);
+    let skip = u16::from(gap && docked.is_none() && !bottom_rows.is_empty());
+    let room = bottom.len().saturating_sub(skip as usize);
+    vs.bottom_rows = panes::visible_rows(&bottom_rows, 0, room, bottom_y + skip);
+    vs.bottom_area = Rect::new(column.x, bottom_y, cw, bottom.len() as u16);
 
-    let mut cursor = bottom_cursor.map(|(r, c)| (area.x + c, bottom_y + r));
+    let mut cursor = bottom_cursor.map(|(r, c)| (column.x + c, bottom_y + r));
     vs.overlay_hit = None;
     if let Some(top) = docked {
         let rows = bottom.len().saturating_sub(3) as u16;
-        vs.overlay_hit =
-            Some((top, bottom_y as i32 + 2, area.x + 2, width.saturating_sub(4), rows));
+        vs.overlay_hit = Some((top, bottom_y as i32 + 2, column.x + 2, cw.saturating_sub(4), rows));
     } else if let Some(top) = m.top_overlay() {
         let focused = target == Some(top);
         let (modal_cursor, inner) = modal(m, top, buf, ctx, focused);
