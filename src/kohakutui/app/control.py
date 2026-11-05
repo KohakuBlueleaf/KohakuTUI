@@ -146,5 +146,7 @@ class ControlMixin:
         """Synthetic input for a ``backend="test"`` app: ``{"text": s}`` types at human pace,
         ``{"burst": s}`` at paste pace, ``{"key": "ctrl+t"}``, ``{"paste": s}``,
         ``{"resize": (cols, rows)}``, ``{"click": (col, row)}`` (press and release, full
-        screen), ``{"scroll": n}`` (wheel steps, positive is up)."""
+        screen), ``{"drag": (from_col, row, to_col)}``, ``{"middle": (col, row)}``,
+        ``{"scroll": n}`` (wheel steps, positive is up; ``"at": (col, row)`` places the
+        pointer)."""
         self._session.inject(list(events))

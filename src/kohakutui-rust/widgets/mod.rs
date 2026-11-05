@@ -14,6 +14,7 @@ mod editor;
 mod field;
 mod layout;
 mod markdown;
+mod pane;
 mod picker;
 mod props;
 mod registry;
@@ -22,6 +23,7 @@ mod status;
 #[cfg(test)]
 mod tests;
 mod text;
+mod tree;
 
 use std::any::Any;
 use std::time::Instant;
@@ -43,11 +45,13 @@ pub use editor::TextEditor;
 pub use field::Field;
 pub use layout::{Columns, Divider, Stack, Tabs};
 pub use markdown::Markdown;
+pub use pane::{Pane, TabStrip};
 pub use picker::Picker;
 pub use registry::{build, KINDS};
 pub use scroll::Scroll;
 pub use status::{Progress, Sparkline, Status};
 pub use text::{Code, Log, Text};
+pub use tree::Tree;
 
 /// What a component sees while rendering.
 #[derive(Debug, Clone, Copy)]
@@ -100,6 +104,8 @@ pub enum Input {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MouseAct {
     Click,
+    /// A middle-button press (closes a tab).
+    Middle,
     ScrollUp,
     ScrollDown,
 }

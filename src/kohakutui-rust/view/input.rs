@@ -8,7 +8,7 @@ use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEventKind};
 
 use super::layout::{input_target, page_input};
 use super::{Selection, ViewState};
-use crate::model::{Model, BOTTOM, LIVE, PANELS, TRANSCRIPT};
+use crate::model::{Model, BOTTOM, HEAD, LIVE, PANELS};
 use crate::proto::{Event, Mode, NodeId};
 use crate::widgets::{Emit, Input, Mouse, MouseAct};
 
@@ -65,6 +65,16 @@ pub fn handle_input(
                     return Outcome::Redraw;
                 }
                 _ => {}
+            }
+        }
+        // panes: alt+←/→ moves the focused pane's divider; F6 / shift+F6 step between areas
+        if vs.mode == Mode::Fullscreen && top.is_none() {
+            if super::panes::resize_key(m, vs, target, code, mods, events) {
+                return Outcome::Redraw;
+            }
+            if code == KeyCode::F(6) {
+                cycle_area(m, vs, mods.contains(KeyModifiers::SHIFT));
+                return Outcome::Redraw;
             }
         }
         if code == KeyCode::Esc {
@@ -133,7 +143,7 @@ pub fn handle_input(
 
     // esc on a control in the transcript (a form in a reply) gives the keys back to the input
     if code == KeyCode::Esc && top.is_none() {
-        if let Some(t) = target.filter(|t| m.region_of(*t) == Some(TRANSCRIPT)) {
+        if let Some(t) = target.filter(|t| m.doc_of(*t) == Some(m.doc())) {
             let back = m.subtree(BOTTOM).into_iter().find(|id| {
                 *id != t && m.node(*id).is_some_and(|n| !n.sealed && n.comp.focusable())
             });
@@ -193,6 +203,9 @@ pub fn handle_mouse(
     }
     if vs.mode != Mode::Fullscreen {
         return false;
+    }
+    if let Some(done) = super::panes::mouse(m, vs, kind, col, row, events) {
+        return done;
     }
     let header_at = |vs: &ViewState| {
         vs.hits
@@ -367,7 +380,7 @@ fn builtin(m: &Model, vs: &mut ViewState, code: KeyCode) -> Outcome {
         (KeyCode::PageDown, Mode::Fullscreen) => vs.scroll = vs.scroll.saturating_sub(PAGE),
         // ↑/↓ that the focused input did not use step between inputs in layout order
         (KeyCode::Up | KeyCode::Down, _) if m.top_overlay() == vs.overlay_blur => {
-            let inputs = focusable(m);
+            let inputs = focusable(m, vs.mode);
             let cur = input_target(m, vs).and_then(|t| inputs.iter().position(|i| *i == t));
             let next = match (cur, code) {
                 (Some(i), KeyCode::Down) if i + 1 < inputs.len() => i + 1,
@@ -377,7 +390,7 @@ fn builtin(m: &Model, vs: &mut ViewState, code: KeyCode) -> Outcome {
             vs.focus = Some(inputs[next]);
         }
         (KeyCode::Tab, _) | (KeyCode::BackTab, _) => {
-            let inputs = focusable(m);
+            let inputs = focusable(m, vs.mode);
             if inputs.is_empty() {
                 return Outcome::Nothing;
             }
@@ -395,18 +408,55 @@ fn builtin(m: &Model, vs: &mut ViewState, code: KeyCode) -> Outcome {
     Outcome::Redraw
 }
 
-/// Every open focusable node in layout order: controls in open transcript cells (forms in a
-/// reply that is still live), then the live, panel and bottom regions.
-fn focusable(m: &Model) -> Vec<NodeId> {
-    [TRANSCRIPT, LIVE, PANELS, BOTTOM]
+/// Every open focusable node in layout order: controls in the shown document's open cells
+/// (forms in a reply that is still live), the live region, then, in full screen, the head
+/// row and the panes, and the bottom region.
+pub(crate) fn focusable(m: &Model, mode: Mode) -> Vec<NodeId> {
+    let full = mode == Mode::Fullscreen;
+    let regions = [
+        Some(m.doc()),
+        Some(LIVE),
+        full.then_some(HEAD),
+        full.then_some(PANELS),
+    ];
+    regions
         .into_iter()
+        .flatten()
+        .chain([BOTTOM])
         .flat_map(|r| m.subtree(r))
         .filter(|id| m.node(*id).is_some_and(|n| !n.sealed && n.comp.focusable()))
         .filter(|id| !m.ancestors_sealed(*id) && !m.hidden(*id))
         .collect()
 }
 
-fn to_event(id: NodeId, e: Emit) -> Event {
+/// Moves the keys to the next area (the document, the head row, each open pane, the input)
+/// that has something to focus: its first focusable node.
+fn cycle_area(m: &Model, vs: &mut ViewState, back: bool) {
+    let mut areas = vec![m.doc(), LIVE, HEAD];
+    areas.extend(vs.pane_hits.iter().filter(|h| !h.strip).map(|h| h.id));
+    areas.push(BOTTOM);
+    let inputs = focusable(m, vs.mode);
+    let firsts: Vec<(NodeId, NodeId)> = areas
+        .iter()
+        .filter_map(|&a| inputs.iter().find(|i| m.is_within(**i, a)).map(|&i| (a, i)))
+        .collect();
+    if firsts.is_empty() {
+        return;
+    }
+    let cur = input_target(m, vs);
+    let at = firsts
+        .iter()
+        .position(|(a, _)| cur.is_some_and(|t| m.is_within(t, *a)));
+    let n = firsts.len();
+    let next = match (at, back) {
+        (Some(i), false) => (i + 1) % n,
+        (Some(i), true) => (i + n - 1) % n,
+        (None, _) => 0,
+    };
+    vs.focus = Some(firsts[next].1);
+}
+
+pub(crate) fn to_event(id: NodeId, e: Emit) -> Event {
     match e {
         Emit::Submit(value) => Event::Submit { id, value },
         Emit::Change(value) => Event::Change { id, value },

@@ -27,6 +27,8 @@ fn all_ops() -> Vec<Op> {
         Op::Bell,
         Op::Copy { text: "copied ✓".into() },
         Op::SetLinks { osc8: false },
+        Op::ShowDoc { id: 40, note: None },
+        Op::ShowDoc { id: 41, note: Some("── planner ──".into()) },
         Op::SetTheme {
             scheme: "tokyo-night".into(),
             overrides: vec![("accent".into(), "#ff8800".into())],

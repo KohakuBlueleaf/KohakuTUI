@@ -6,14 +6,15 @@
 use ratatui::text::Line;
 
 use super::render::{cell_parts, node_lines, separator};
-use crate::model::{FlushState, Model, TRANSCRIPT};
+use crate::model::{FlushState, Model};
 use crate::proto::NodeId;
 use crate::widgets::{Cell, Ctx};
 
 /// Takes every line that became final since the last call, advancing flush state.
 pub fn take_flushable(m: &mut Model, width: u16, ctx: &Ctx) -> Vec<Line<'static>> {
     let mut out = Vec::new();
-    let cells: Vec<NodeId> = m.children(TRANSCRIPT).to_vec();
+    // only the shown document reaches scrollback; another one flushes when it is shown
+    let cells: Vec<NodeId> = m.children(m.doc()).to_vec();
 
     for id in cells {
         let state = m.flush_state(id);
@@ -82,7 +83,7 @@ pub fn take_flushable(m: &mut Model, width: u16, ctx: &Ctx) -> Vec<Line<'static>
 /// Takes every remaining transcript line as if each cell had sealed, for shutdown.
 pub fn flush_all(m: &mut Model, width: u16, ctx: &Ctx) -> Vec<Line<'static>> {
     let mut out = Vec::new();
-    let cells: Vec<NodeId> = m.children(TRANSCRIPT).to_vec();
+    let cells: Vec<NodeId> = m.children(m.doc()).to_vec();
 
     for id in cells {
         match m.flush_state(id) {

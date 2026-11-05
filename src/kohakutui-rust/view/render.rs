@@ -6,7 +6,7 @@
 
 use ratatui::text::{Line, Span};
 
-use crate::model::{Model, TRANSCRIPT};
+use crate::model::Model;
 use crate::proto::NodeId;
 use crate::text::{clip, display_width, theme, MdLine};
 use crate::widgets::{Cell, Columns, Ctx, Markdown, Role, Stack};
@@ -495,7 +495,8 @@ fn banded(line: Line<'static>, width: usize, band: ratatui::style::Style) -> Lin
 
 /// The blank line between transcript cells: every cell but the first gets one above it.
 pub(crate) fn separator(m: &Model, id: NodeId) -> Vec<Line<'static>> {
-    match m.children(TRANSCRIPT).first() {
+    let doc = m.doc_of(id).unwrap_or(m.doc());
+    match m.children(doc).first() {
         Some(first) if *first != id => vec![Line::default()],
         _ => Vec::new(),
     }

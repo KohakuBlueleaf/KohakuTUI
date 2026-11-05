@@ -5,7 +5,7 @@
 //! and nothing can be created or moved into the transcript at or before it, so scrollback stays
 //! append-only and in order.
 
-use super::{Model, ModelError, Node, FIRST_FREE, OVERLAYS, REGIONS, TRANSCRIPT};
+use super::{Model, ModelError, Node, DOCS, FIRST_FREE, OVERLAYS, REGIONS};
 use crate::proto::{NodeId, Op};
 use crate::widgets::build;
 
@@ -21,6 +21,10 @@ impl Model {
                     return Err(ModelError::Duplicate(id));
                 }
                 self.check_target(parent, index)?;
+                // documents live in DOCS, and DOCS holds nothing else
+                if (parent == DOCS) != (kind == "document") {
+                    return Err(ModelError::NotContainer(parent));
+                }
 
                 let comp = build(&kind, &props)?;
                 self.insert(Node {
@@ -56,6 +60,9 @@ impl Model {
             }
             Op::Move { id, parent, index } => {
                 self.check_movable(id)?;
+                if parent == DOCS || self.is_doc(id) {
+                    return Err(ModelError::NotContainer(parent));
+                }
                 if self.is_within(parent, id) {
                     return Err(ModelError::Cycle(id));
                 }
@@ -90,6 +97,7 @@ impl Model {
             Op::Copy { .. } => Err(ModelError::NotTreeOp("copy")),
             Op::SetLinks { .. } => Err(ModelError::NotTreeOp("set_links")),
             Op::SetTheme { .. } => Err(ModelError::NotTreeOp("set_theme")),
+            Op::ShowDoc { .. } => Err(ModelError::NotTreeOp("show_doc")),
         }
     }
 
@@ -115,10 +123,10 @@ impl Model {
             return Err(ModelError::Frozen(parent));
         }
 
-        // a transcript insert must land after every cell already (partly) in scrollback
-        if parent == TRANSCRIPT {
+        // a document insert must land after every cell already (partly) in scrollback
+        if self.is_doc(parent) {
             if let Some(i) = index {
-                if i < self.frozen_len() {
+                if i < self.frozen_len(parent) {
                     return Err(ModelError::Frozen(parent));
                 }
             }

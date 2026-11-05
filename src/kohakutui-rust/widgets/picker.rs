@@ -758,6 +758,7 @@ impl Component for Picker {
         let view = self.view();
         let count = view.len();
         match m.act {
+            MouseAct::Middle => return false,
             MouseAct::ScrollUp => self.selected = self.selected.saturating_sub(1),
             MouseAct::ScrollDown => {
                 self.selected = (self.selected + 1).min(count.saturating_sub(1))

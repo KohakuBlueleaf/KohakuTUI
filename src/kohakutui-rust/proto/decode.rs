@@ -51,6 +51,10 @@ impl Op {
                 },
             },
             "bell" => Op::Bell,
+            "show_doc" => Op::ShowDoc {
+                id: req_id(v, "id")?,
+                note: get(v, "note").and_then(Value::as_str).map(str::to_owned),
+            },
             "copy" => Op::Copy { text: req_str(v, "text")?.to_owned() },
             "set_links" => {
                 Op::SetLinks { osc8: get(v, "osc8").and_then(Value::as_bool).unwrap_or(true) }

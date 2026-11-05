@@ -88,6 +88,14 @@ pub enum Op {
     Copy {
         text: String,
     },
+    /// Shows document `id` (the transcript, or a `document` node under the docs region) where
+    /// the transcript is: drawn, flushed to scrollback inline, taking input.
+    ShowDoc {
+        id: NodeId,
+        /// Inline: a line written to scrollback before the document's own (a "── name ──"
+        /// divider), so it belongs to the switch and to no document.
+        note: Option<String>,
+    },
     /// Links as OSC 8 hyperlinks (true, the default on a terminal) or written as "text (url)".
     /// Send it before drawing: text already laid out keeps its form.
     SetLinks {
@@ -148,6 +156,12 @@ pub enum Event {
     /// A link clicked in full screen (inline, the terminal handles links itself).
     Link {
         url: String,
+    },
+    /// The user resized or collapsed a pane (its new width and state, for the app to keep).
+    Pane {
+        id: NodeId,
+        width: u64,
+        collapsed: bool,
     },
     Error {
         id: Option<NodeId>,

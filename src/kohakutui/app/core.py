@@ -51,6 +51,8 @@ class CoreMixin:
         self._state_lock = threading.Lock()
         self._local = threading.local()
         self._started = False
+        # ops sent before start (None once started)
+        self._early: list[dict[str, Any]] | None = []
         self._stopping = False
         self._stopped = False
         self.dispatcher = Dispatcher(self)
@@ -64,6 +66,14 @@ class CoreMixin:
                 return self
             self._started = True
         self._session.start()
+        with self._send_lock:
+            with self._state_lock:
+                early, self._early = self._early or [], None
+            if early:
+                try:
+                    self._session.apply(early)
+                except RuntimeError:
+                    self._mark_stopped()
         self.pump_thread = threading.Thread(
             target=self._pump, name="kohakutui-pump", daemon=True
         )
@@ -152,8 +162,13 @@ class CoreMixin:
         self._apply(ops)
 
     def _apply(self, ops: list[dict[str, Any]]) -> None:
-        if not ops or self._stopped or not self._started:
+        if not ops or self._stopped:
             return
+        with self._state_lock:
+            if self._early is not None:
+                # built before start: delivered when the engine starts, in order
+                self._early.extend(ops)
+                return
 
         # one lock around the hand-off keeps ops from two threads in the order they were sent
         with self._send_lock:

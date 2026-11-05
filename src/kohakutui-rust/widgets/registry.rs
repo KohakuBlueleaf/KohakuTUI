@@ -2,8 +2,8 @@
 
 use super::{
     Bars, Button, Card, Cell, Chart, Code, Columns, Component, Composer, Confirm, Divider, Field,
-    Footer, Kv, Log, Markdown, Picker, Progress, Prompt, Scroll, Sparkline, Stack, Status, Table,
-    Tabs, Text, WidgetError,
+    Footer, Kv, Log, Markdown, Pane, Picker, Progress, Prompt, Scroll, Sparkline, Stack, Status,
+    TabStrip, Table, Tabs, Text, Tree, WidgetError,
 };
 use crate::proto::Value;
 
@@ -34,6 +34,10 @@ pub const KINDS: &[&str] = &[
     "columns",
     "tabs",
     "bars",
+    "document",
+    "pane",
+    "tabstrip",
+    "tree",
 ];
 
 /// Builds a component of `kind` and applies its initial props.
@@ -63,6 +67,11 @@ pub fn build(kind: &str, props: &Value) -> Result<Box<dyn Component>, WidgetErro
         "columns" => Box::<Columns>::default(),
         "tabs" => Box::<Tabs>::default(),
         "bars" => Box::<Bars>::default(),
+        // a document is a transcript: a plain container, kept apart by the docs region
+        "document" => Box::<Stack>::default(),
+        "pane" => Box::<Pane>::default(),
+        "tabstrip" => Box::<TabStrip>::default(),
+        "tree" => Box::<Tree>::default(),
         "scroll" => Box::<Scroll>::default(),
         other => return Err(WidgetError::UnknownKind(other.to_owned())),
     };

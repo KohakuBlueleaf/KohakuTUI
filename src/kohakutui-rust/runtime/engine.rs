@@ -87,6 +87,8 @@ struct Engine {
     hard_exit_at: Option<Instant>,
     /// Clock for injected keys, so their spacing is exact whatever the test's real timing.
     virt: Instant,
+    /// Inline: lines for scrollback that belong to no node (a document switch's divider).
+    notes: Vec<String>,
 }
 
 impl Engine {
@@ -99,6 +101,7 @@ impl Engine {
             cfg,
             term,
             model: Model::new(),
+            notes: Vec::new(),
             tx,
             epoch: now,
             dirty: true,
@@ -187,7 +190,7 @@ impl Engine {
         self.model
             .subtree(crate::model::LIVE)
             .into_iter()
-            .chain(self.model.subtree(crate::model::TRANSCRIPT))
+            .chain(self.model.subtree(self.model.doc()))
             .chain(self.model.subtree(crate::model::OVERLAYS))
             .chain(self.model.subtree(crate::model::BOTTOM))
             .any(|id| {
@@ -266,6 +269,17 @@ impl Engine {
             }),
             Op::Bell => {
                 let _ = self.term.bell();
+            }
+            Op::ShowDoc { id, note } => {
+                let before = self.model.doc();
+                if !self.model.show_doc(id) {
+                    self.report(Some(id), format!("node {id} is not a document"));
+                } else if before != id {
+                    if let Some(n) = note.filter(|_| self.vs.mode == Mode::Inline) {
+                        self.notes.push(n);
+                    }
+                    self.vs.switch_doc(&self.model);
+                }
             }
             Op::SetLinks { osc8 } => {
                 crate::text::link::set_osc8(osc8 && !self.term.is_plain());
@@ -424,6 +438,8 @@ impl Engine {
     }
 
     fn draw(&mut self) {
+        // the shown document was removed (the model fell back to the transcript)
+        self.vs.switch_doc(&self.model);
         // cleared first: whatever this frame queues for the next one (a copy's toast) stays
         self.dirty = false;
         if let Err(e) = self.try_draw() {
@@ -444,7 +460,12 @@ impl Engine {
 
         // scrollback first, inline only: in full screen flush state waits for the return
         if self.vs.mode == Mode::Inline {
-            let lines = view::take_flushable(&mut self.model, cols, &ctx);
+            let notes = std::mem::take(&mut self.notes);
+            let mut lines: Vec<_> = notes
+                .into_iter()
+                .map(|n| ratatui::text::Line::styled(n, crate::text::theme::muted()))
+                .collect();
+            lines.extend(view::take_flushable(&mut self.model, cols, &ctx));
             let lines: Vec<_> = lines.into_iter().map(|l| clip(l, cols as usize)).collect();
             self.term.insert_history(&lines)?;
         }

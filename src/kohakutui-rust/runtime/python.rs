@@ -253,6 +253,29 @@ fn parse_inject(ev: &Bound<'_, PyDict>) -> PyResult<Vec<InputEv>> {
             InputEv::Mouse { kind: up, col, row },
         ]);
     }
+    if let Some(d) = ev.get_item("drag")? {
+        // press at `from`, move to `to` on the same row, release there
+        let (from, row, to): (u16, u16, u16) = d.extract()?;
+        let mut out =
+            vec![InputEv::Mouse { kind: MouseEventKind::Down(MouseButton::Left), col: from, row }];
+        let step: i32 = if to >= from { 1 } else { -1 };
+        let mut col = i32::from(from);
+        while col != i32::from(to) {
+            col += step;
+            out.push(InputEv::Mouse {
+                kind: MouseEventKind::Drag(MouseButton::Left),
+                col: col as u16,
+                row,
+            });
+        }
+        out.push(InputEv::Mouse { kind: MouseEventKind::Up(MouseButton::Left), col: to, row });
+        return Ok(out);
+    }
+    if let Some(c) = ev.get_item("middle")? {
+        let (col, row): (u16, u16) = c.extract()?;
+        let kind = MouseEventKind::Down(MouseButton::Middle);
+        return Ok(vec![InputEv::Mouse { kind, col, row }]);
+    }
     if let Some(n) = ev.get_item("scroll")? {
         let n: i32 = n.extract()?;
         let kind = if n > 0 {
@@ -261,7 +284,12 @@ fn parse_inject(ev: &Bound<'_, PyDict>) -> PyResult<Vec<InputEv>> {
             MouseEventKind::ScrollDown
         };
         let steps = n.unsigned_abs() as usize;
-        return Ok(vec![InputEv::Mouse { kind, col: 0, row: 0 }; steps]);
+        // where the pointer is: {"scroll": n, "at": [col, row]}, else the top-left cell
+        let (col, row): (u16, u16) = match ev.get_item("at")? {
+            Some(at) => at.extract()?,
+            None => (0, 0),
+        };
+        return Ok(vec![InputEv::Mouse { kind, col, row }; steps]);
     }
     if let Some(k) = ev.get_item("key")? {
         let name: String = k.extract()?;

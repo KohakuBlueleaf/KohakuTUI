@@ -174,7 +174,7 @@ impl Component for Scroll {
         match m.act {
             MouseAct::ScrollUp => self.move_by(WHEEL as isize),
             MouseAct::ScrollDown => self.move_by(-(WHEEL as isize)),
-            MouseAct::Click => false,
+            MouseAct::Click | MouseAct::Middle => false,
         }
     }
 

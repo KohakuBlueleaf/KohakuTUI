@@ -412,3 +412,59 @@ class Bars(Component):
     percent: bool | None = None
     max: float | None = None
     digits: int | None = None
+
+
+@dataclass
+class Document(Component):
+    """A transcript of its own; create it with ``app.add_document()``."""
+
+    kind: ClassVar[str] = "document"
+    children: list[Component] = field(default_factory=list)
+
+
+@dataclass
+class Pane(Component):
+    """A full-screen side column under ``app.panels``: ``side`` ``"left"`` or ``"right"``,
+    ``width`` columns (at least ``min``), ``collapsed`` to a one-column strip, ``title`` on top.
+
+    The user drags its divider, double-clicks it to collapse, clicks the strip to open, and
+    with the keys inside it moves the divider with alt+←/→; each change is a ``pane`` event
+    with ``width`` and ``collapsed``. Its direct children receive clicks; the wheel scrolls it.
+    """
+
+    kind: ClassVar[str] = "pane"
+    children: list[Component] = field(default_factory=list)
+    side: str | None = None
+    width: int | None = None
+    min: int | None = None
+    collapsed: bool | None = None
+    title: str | None = None
+
+
+@dataclass
+class TabStrip(Component):
+    """A row of tabs: ``tabs`` as ``[{"label", "value", "dot", "badge", "closable"}]``
+    (``dot`` a tone for a status dot, ``badge`` a count), ``active`` the open one.
+
+    Click or ←/→ selects (``select`` with the value); ctrl+w or a middle click closes a
+    closable tab (``close`` with its value as the reason).
+    """
+
+    kind: ClassVar[str] = "tabstrip"
+    tabs: list[Any] = field(default_factory=list)
+    active: int | None = None
+
+
+@dataclass
+class Tree(Component):
+    """An outline: ``items`` as ``[{"label", "value", "detail", "icon", "tone", "open",
+    "children"}]``. ↑↓ move, → opens, ← closes or steps out, enter or a click selects
+    (``select`` with the value), a click on ▸ toggles. ``children: True`` (no list) can open
+    and sends ``change`` with ``{"expand": value}`` so the app can fill it in. ``height`` keeps
+    that many rows, scrolling with the cursor; ``selected`` moves the cursor to a value.
+    """
+
+    kind: ClassVar[str] = "tree"
+    items: list[Any] = field(default_factory=list)
+    height: int | None = None
+    selected: str | None = None

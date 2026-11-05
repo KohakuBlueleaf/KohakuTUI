@@ -11,12 +11,14 @@ use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Clear, Widget};
 
+use super::panes;
 use super::render::{cell_parts, foldable, node_lines, separator};
 use super::ViewState;
-use crate::model::{FlushState, Model, BOTTOM, LIVE, OVERLAYS, PANELS, TRANSCRIPT};
+use super::{Anchor, Mode};
+use crate::model::{FlushState, Model, BOTTOM, HEAD, LIVE, OVERLAYS, PANELS};
 use crate::proto::{Level, NodeId};
 use crate::text::{clip, display_width, theme};
-use crate::widgets::{Cell, Ctx};
+use crate::widgets::{Cell, Ctx, Role};
 
 /// The inline viewport: its lines, the caret within them, and where the top overlay's content
 /// is: (overlay, row, col, width, height), the row possibly above the viewport when cut.
@@ -40,9 +42,13 @@ pub fn input_target(m: &Model, vs: &ViewState) -> Option<NodeId> {
 /// The input outside the overlays that keys go to: a valid focus (a control in an open
 /// transcript cell counts once focused), else the first input outside the transcript.
 pub(crate) fn page_input(m: &Model, vs: &ViewState) -> Option<NodeId> {
+    let full = vs.mode == Mode::Fullscreen;
     let open = |id: NodeId| {
+        let region = m.region_of(id);
         m.node(id).is_some_and(|n| !n.sealed && n.comp.focusable())
-            && m.region_of(id) != Some(OVERLAYS)
+            && region != Some(OVERLAYS)
+            && (full || !matches!(region, Some(HEAD | PANELS)))
+            && m.doc_of(id).is_none_or(|d| d == m.doc())
             && !m.ancestors_sealed(id)
             && !m.hidden(id)
     };
@@ -128,7 +134,7 @@ fn framed(
 /// Unflushed transcript lines: whole cells, or the unflushed tail of the head cell.
 fn transcript_tail(m: &Model, width: u16, ctx: &Ctx) -> Vec<Line<'static>> {
     let mut out = Vec::new();
-    for &id in m.children(TRANSCRIPT) {
+    for &id in m.children(m.doc()) {
         match m.flush_state(id) {
             Some(FlushState::Full) => {}
             Some(FlushState::Partial { src_off }) => {
@@ -255,21 +261,33 @@ fn keep_gap_above(bottom: &mut Vec<Line<'static>>, cursor: &mut Option<(u16, u16
 /// Every transcript line for full screen, with the foldable headers (line, node) and scroll
 /// boxes (first line, height, node) at every depth. Sealed cells are cached by width, version
 /// and expand-all; opening a nested header bumps its ancestors' versions.
-#[allow(clippy::type_complexity)]
-fn transcript_all(
-    m: &Model,
-    vs: &mut ViewState,
-    width: u16,
-    ctx: &Ctx,
-) -> (Vec<Line<'static>>, Vec<(usize, NodeId)>, Vec<(usize, usize, NodeId)>) {
+struct Transcript {
+    lines: Vec<Line<'static>>,
+    /// Foldable headers: (line, node).
+    heads: Vec<(usize, NodeId)>,
+    /// Scroll boxes: (first line, lines, node).
+    scrolls: Vec<(usize, usize, NodeId)>,
+    /// The first line of each user message (the sticky prompt when scrolled past it).
+    prompts: Vec<usize>,
+    /// Each top-level node's first line (its separator included), in order.
+    bases: Vec<(NodeId, usize)>,
+}
+
+fn transcript_all(m: &Model, vs: &mut ViewState, width: u16, ctx: &Ctx) -> Transcript {
     let ctx = ctx.expanded(vs.expand_all);
     let mut out = Vec::new();
     let mut heads = Vec::new();
     let mut scrolls = Vec::new();
-    for &id in m.children(TRANSCRIPT) {
+    let mut prompts = Vec::new();
+    let mut bases = Vec::new();
+    for &id in m.children(m.doc()) {
+        bases.push((id, out.len()));
         out.extend(separator(m, id));
         let Some(node) = m.node(id) else { continue };
         let base = out.len();
+        if m.comp_as::<Cell>(id).is_some_and(|c| c.role == Role::User) {
+            prompts.push(base);
+        }
 
         let cached = vs
             .cache
@@ -304,7 +322,7 @@ fn transcript_all(
         out.extend(lines);
     }
     vs.cache.retain(|id, _| m.contains(*id));
-    (out, heads, scrolls)
+    Transcript { lines: out, heads, scrolls, prompts, bases }
 }
 
 fn draw_lines(buf: &mut Buffer, area: Rect, lines: &[Line<'static>]) {
@@ -323,6 +341,7 @@ pub fn fullscreen(
     let area = buf.area;
     let target = input_target(m, vs);
     let width = area.width;
+    vs.screen_width = width;
 
     // a docked overlay replaces the bottom region, framed, and may take two thirds of the screen
     let docked = docked_overlay(m);
@@ -342,18 +361,52 @@ pub fn fullscreen(
     let fixed = (bottom.len() + live.len() + toasts.len()) as u16;
     let main_h = area.height.saturating_sub(fixed);
 
-    // panels take the right third when the screen is wide enough
-    let has_panels = !m.children(PANELS).is_empty() && width >= 60;
+    // panes around the transcript; without any, other panel content takes the right third
+    let body_h = main_h;
+    let body = Rect::new(area.x, area.y, width, body_h);
+    let pane_list = !panes::panes(m).is_empty();
+    let (mut main, mut pane_hits) = if pane_list {
+        panes::split(m, body)
+    } else {
+        (body, Vec::new())
+    };
+    let has_panels = !pane_list && !m.children(PANELS).is_empty() && width >= 60;
     let panel_w = if has_panels {
         (width / 3).clamp(24, 60)
     } else {
         0
     };
-    let main = Rect::new(area.x, area.y, width - panel_w, main_h);
+    main.width -= panel_w;
 
-    let (lines, heads, scrolls) = transcript_all(m, vs, main.width, ctx);
+    // the head row (a tab strip) over the transcript
+    let (head, head_rows) = panes::stacked(m, HEAD, main.width, ctx, target);
+    let head_h = head.len().min(3).min(main.height as usize / 2) as u16;
+    draw_lines(buf, Rect::new(main.x, main.y, main.width, head_h), &head);
+    vs.head_rows = panes::visible_rows(&head_rows, 0, head_h as usize, main.y);
+    vs.head_area = Rect::new(main.x, main.y, main.width, head_h);
+    let main = Rect::new(main.x, main.y + head_h, main.width, main.height.saturating_sub(head_h));
+    let main_h = main.height;
+
+    let t = transcript_all(m, vs, main.width, ctx);
+    let Transcript { lines, heads, scrolls, prompts, bases } = t;
     let total = lines.len();
     let h = main_h as usize;
+    // follow: scrolled up, the line at the top of the view stays there whatever changes below
+    // or around it (new lines, a re-wrap, a fold), until the user scrolls; messages that arrive
+    // meanwhile are counted
+    let cells = m.children(m.doc()).len();
+    match vs.anchor.filter(|a| vs.scroll > 0 && vs.scroll == a.scroll) {
+        Some(a) => {
+            if let Some(&(_, base)) = bases.iter().find(|(id, _)| *id == a.node) {
+                let top = (base + a.offset).min(total);
+                vs.scroll = total.saturating_sub(top + h).max(1);
+            }
+            vs.unseen += cells.saturating_sub(a.cells);
+        }
+        None if vs.scroll == 0 => vs.unseen = 0,
+        None => {}
+    }
+    vs.anchor = None;
     // the header focused by keyboard navigation stays in view; a removed one ends navigation
     if vs
         .nav
@@ -372,6 +425,13 @@ pub fn fullscreen(
     let end = total - vs.scroll;
     let start = end.saturating_sub(h);
     draw_lines(buf, main, &lines[start..end]);
+    if vs.scroll > 0 {
+        // the node holding the top line, and how far into it, for the next frame
+        if let Some(&(node, base)) = bases.iter().rev().find(|(_, b)| *b <= start) {
+            let offset = start - base;
+            vs.anchor = Some(Anchor { node, offset, scroll: vs.scroll, cells });
+        }
+    }
     vs.heads = heads.iter().map(|(_, id)| *id).collect();
     vs.hits = heads
         .into_iter()
@@ -398,11 +458,29 @@ pub fn fullscreen(
         };
         buf.set_style(Rect::new(main.x, y, w, 1), style);
     }
+    // scrolled past a prompt: the last one above the view stays on the top row
+    if let Some(&at) = prompts.iter().rev().find(|&&at| at < start) {
+        if main_h > 2 {
+            buf.set_style(Rect::new(main.x, main.y, main.width, 1), theme::user_band());
+            buf.set_line(main.x, main.y, &lines[at], main.width);
+            vs.hits.retain(|&(y, _, _)| y != main.y);
+            // a scroll box under the sticky row starts one row lower
+            vs.scroll_hits = std::mem::take(&mut vs.scroll_hits)
+                .into_iter()
+                .filter_map(|(y, rows, id)| match y == main.y {
+                    true => (rows > 1).then_some((y + 1, rows - 1, id)),
+                    false => Some((y, rows, id)),
+                })
+                .collect();
+        }
+    }
     if vs.scroll > 0 && main_h > 0 {
-        let note = Line::from(Span::styled(
-            format!(" ↓ {} more · ctrl+end ", vs.scroll),
-            theme::selection(),
-        ));
+        let text = if vs.unseen > 0 {
+            format!(" ↓ {} new · ctrl+end ", vs.unseen)
+        } else {
+            format!(" ↓ {} more · ctrl+end ", vs.scroll)
+        };
+        let note = Line::from(Span::styled(text, theme::selection()));
         // on the top row instead when the bottom one holds the navigated header
         let bottom = main.y + main_h - 1;
         let covers = vs
@@ -413,8 +491,12 @@ pub fn fullscreen(
         buf.set_line(main.x, y, &note, main.width);
     }
 
+    for hit in pane_hits.iter_mut() {
+        panes::draw(m, vs, hit, buf, ctx, target);
+    }
+    vs.pane_hits = pane_hits;
     if has_panels {
-        let pane = Rect::new(main.x + main.width, area.y, panel_w, main_h);
+        let pane = Rect::new(main.x + main.width, area.y, panel_w, body_h);
         let inner = pane.width.saturating_sub(2);
         let mut sink = None;
         let mut panel_lines = Vec::new();

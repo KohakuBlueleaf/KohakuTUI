@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::{FlushState, Model, Node, REGIONS, TRANSCRIPT};
+use super::{FlushState, Model, Node, DOCS, REGIONS, TRANSCRIPT};
 use crate::proto::NodeId;
 use crate::widgets::{Component, Stack};
 
@@ -29,7 +29,40 @@ impl Model {
                 },
             );
         }
-        Model { nodes, flush: HashMap::new(), open: HashSet::new() }
+        Model { nodes, flush: HashMap::new(), open: HashSet::new(), shown: TRANSCRIPT }
+    }
+
+    /// The document shown as the transcript (drawn, flushed to scrollback, taking input).
+    pub fn doc(&self) -> NodeId {
+        self.shown
+    }
+
+    /// Whether `id` is a document: the transcript or a child of `DOCS`.
+    pub fn is_doc(&self, id: NodeId) -> bool {
+        id == TRANSCRIPT || self.nodes.get(&id).is_some_and(|n| n.parent == DOCS)
+    }
+
+    /// Shows document `id`; false when it is not one.
+    pub fn show_doc(&mut self, id: NodeId) -> bool {
+        if !self.is_doc(id) {
+            return false;
+        }
+        if self.shown != id {
+            self.shown = id;
+            self.bump(id);
+        }
+        true
+    }
+
+    /// The document a node is in, None outside every document.
+    pub fn doc_of(&self, id: NodeId) -> Option<NodeId> {
+        let mut cur = id;
+        loop {
+            if self.is_doc(cur) {
+                return Some(cur);
+            }
+            cur = self.nodes.get(&cur).filter(|n| n.parent != 0)?.parent;
+        }
     }
 
     /// Whether the user toggled this foldable node (opened it, or closed it under expand-all).
@@ -166,9 +199,10 @@ impl Model {
         }
     }
 
-    /// Leading transcript cells with anything in scrollback: positions before this are frozen.
-    pub fn frozen_len(&self) -> usize {
-        self.children(TRANSCRIPT)
+    /// Leading cells of document `doc` with anything in scrollback: positions before this are
+    /// frozen.
+    pub fn frozen_len(&self, doc: NodeId) -> usize {
+        self.children(doc)
             .iter()
             .take_while(|id| self.flush.contains_key(id))
             .count()
@@ -213,6 +247,9 @@ impl Model {
 
     /// Drops a node and its whole subtree, flush state included.
     pub(crate) fn drop_subtree(&mut self, id: NodeId) {
+        if self.is_within(self.shown, id) {
+            self.shown = TRANSCRIPT;
+        }
         let mut stack = vec![id];
         while let Some(cur) = stack.pop() {
             if let Some(n) = self.nodes.remove(&cur) {

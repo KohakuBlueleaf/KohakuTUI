@@ -6,6 +6,7 @@ mod chord;
 mod flush;
 mod input;
 mod layout;
+mod panes;
 mod render;
 #[cfg(test)]
 mod tests;
@@ -28,6 +29,44 @@ pub struct Toast {
     pub text: String,
     pub level: Level,
     pub until: Instant,
+}
+
+/// The top line of a scrolled-up full-screen view: `offset` lines into top-level `node`, while
+/// the scroll is `scroll` and the document has `cells` top-level nodes.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Anchor {
+    pub node: NodeId,
+    pub offset: usize,
+    pub scroll: usize,
+    pub cells: usize,
+}
+
+impl ViewState {
+    /// Moves the per-document view state to the model's shown document, when it changed: the
+    /// old one keeps its scroll for later, the new one gets its own back; navigation,
+    /// selection, follow and a focus left in the old document end.
+    pub(crate) fn switch_doc(&mut self, m: &crate::model::Model) {
+        let now = m.doc();
+        if now == self.shown {
+            return;
+        }
+        if m.contains(self.shown) {
+            self.doc_scroll.insert(self.shown, self.scroll);
+        }
+        self.doc_scroll.retain(|id, _| m.contains(*id));
+        self.scroll = self.doc_scroll.remove(&now).unwrap_or(0);
+        self.shown = now;
+        self.nav = None;
+        self.selection = None;
+        self.anchor = None;
+        self.unseen = 0;
+        if self
+            .focus
+            .is_some_and(|f| m.doc_of(f).is_some_and(|d| d != now))
+        {
+            self.focus = None;
+        }
+    }
 }
 
 /// Engine-local presentation state.
@@ -54,6 +93,26 @@ pub struct ViewState {
     pub(crate) scroll_hits: Vec<(u16, u16, NodeId)>,
     /// Full screen: where linked cells were drawn, as (row, first col, end col, link id).
     pub(crate) link_hits: Vec<(u16, u16, u16, u32)>,
+    /// Full screen: the scroll of documents not shown now, restored when shown again.
+    pub(crate) doc_scroll: std::collections::HashMap<NodeId, usize>,
+    /// Full screen: panes as laid out on the last frame, and each pane's scroll (rows from top).
+    pub(crate) pane_hits: Vec<panes::PaneHit>,
+    pub(crate) pane_scroll: std::collections::HashMap<NodeId, usize>,
+    /// A divider being dragged, and the last divider press (for double-clicks).
+    pub(crate) drag: Option<panes::Drag>,
+    pub(crate) divider_click: Option<(NodeId, std::time::Instant)>,
+    /// The head row's children as drawn: (row, rows, node, first row shown), and its left edge.
+    pub(crate) head_rows: Vec<(u16, u16, NodeId, u16)>,
+    pub(crate) head_area: ratatui::layout::Rect,
+    /// The document drawn on the last frame: a change (shown, or the shown one removed) resets
+    /// the per-document view state.
+    pub(crate) shown: NodeId,
+    /// Follow: where the top of the view was on the last frame (scrolled up), and messages
+    /// that arrived below the view since the user scrolled up.
+    pub(crate) anchor: Option<Anchor>,
+    pub(crate) unseen: usize,
+    /// The screen width on the last full-screen frame (caps pane widths).
+    pub(crate) screen_width: u16,
     /// Every foldable header of the transcript in order, for keyboard navigation.
     pub(crate) heads: Vec<NodeId>,
     /// The header under the mouse pointer (full screen).
@@ -124,6 +183,17 @@ impl ViewState {
             hits: Vec::new(),
             scroll_hits: Vec::new(),
             link_hits: Vec::new(),
+            doc_scroll: std::collections::HashMap::new(),
+            pane_hits: Vec::new(),
+            pane_scroll: std::collections::HashMap::new(),
+            drag: None,
+            divider_click: None,
+            head_rows: Vec::new(),
+            head_area: ratatui::layout::Rect::default(),
+            shown: crate::model::TRANSCRIPT,
+            anchor: None,
+            unseen: 0,
+            screen_width: 80,
             heads: Vec::new(),
             hover: None,
             nav: None,

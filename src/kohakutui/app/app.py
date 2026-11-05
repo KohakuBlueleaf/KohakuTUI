@@ -7,9 +7,10 @@ from kohakutui.app.capture import CaptureMixin
 from kohakutui.app.control import ControlMixin
 from kohakutui.app.core import CoreMixin
 from kohakutui.app.dialogs import DialogsMixin
+from kohakutui.ui.components import Document
 from kohakutui.ui.node import Node
 
-TRANSCRIPT, LIVE, BOTTOM, PANELS, OVERLAYS = 1, 2, 3, 4, 5
+TRANSCRIPT, LIVE, BOTTOM, PANELS, OVERLAYS, DOCS, HEAD = 1, 2, 3, 4, 5, 6, 7
 
 THEMES = (
     "kohaku-dark",
@@ -70,7 +71,26 @@ class App(CoreMixin, ControlMixin, DialogsMixin, CaptureMixin):
         self.bottom = Node(self, BOTTOM, "region")
         self.panels = Node(self, PANELS, "region")
         self.overlays = Node(self, OVERLAYS, "region")
+        # full screen only: a row over the transcript, for a tab strip
+        self.head = Node(self, HEAD, "region")
+        self._docs = Node(self, DOCS, "region")
         self._theme = theme
+
+    def add_document(self) -> Node:
+        """A further transcript (one per conversation): add cells to it like to
+        ``app.transcript``; it is drawn, and inline reaches scrollback, while it is shown.
+        """
+        return self._docs.add(Document())
+
+    def show_document(self, document: Node, note: str | None = None) -> None:
+        """Shows ``document`` (or ``app.transcript``) where the transcript is. Full screen keeps
+        each document's scroll; inline, its lines not yet in scrollback are written now, after
+        ``note`` (a divider line that belongs to the switch, not to either document).
+        """
+        op: dict = {"op": "show_doc", "id": document.id}
+        if note:
+            op["note"] = note
+        self.send([op])
 
     def start(self) -> "App":
         """Takes the terminal, starts the engine and the pump, and applies the theme."""

@@ -23,8 +23,13 @@ pub const BOTTOM: NodeId = 3;
 pub const PANELS: NodeId = 4;
 /// Modal stack; the last child takes input.
 pub const OVERLAYS: NodeId = 5;
+/// Further transcripts ("documents", one per conversation): never drawn as a region; the shown
+/// document takes the transcript's place (see `Model::doc`).
+pub const DOCS: NodeId = 6;
+/// Full screen only: a row above the transcript (a tab strip).
+pub const HEAD: NodeId = 7;
 /// Region ids, in layout order.
-pub const REGIONS: [NodeId; 5] = [TRANSCRIPT, LIVE, BOTTOM, PANELS, OVERLAYS];
+pub const REGIONS: [NodeId; 7] = [TRANSCRIPT, LIVE, BOTTOM, PANELS, OVERLAYS, DOCS, HEAD];
 /// Ids below this are reserved for the engine.
 pub const FIRST_FREE: NodeId = 16;
 
@@ -55,6 +60,8 @@ pub struct Model {
     /// Foldable nodes the user opened (or closed under expand-all): view state, kept here so
     /// every level of the tree renders it.
     open: HashSet<NodeId>,
+    /// The document shown as the transcript: `TRANSCRIPT` or a child of `DOCS`.
+    shown: NodeId,
 }
 
 /// An op the model refuses; the engine reports it as `Event::Error`.

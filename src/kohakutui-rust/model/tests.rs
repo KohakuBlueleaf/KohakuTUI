@@ -64,7 +64,7 @@ fn flushed_cells_freeze_themselves_and_their_positions() {
     let mut m = three_cells();
     m.set_flush(20, FlushState::Full);
     m.set_flush(21, FlushState::Partial { src_off: 10 });
-    assert_eq!(m.frozen_len(), 2);
+    assert_eq!(m.frozen_len(TRANSCRIPT), 2);
 
     assert_eq!(m.apply(Op::Remove { id: 21 }), Err(ModelError::Frozen(21)));
     assert_eq!(m.apply(Op::Remove { id: 31 }), Err(ModelError::Frozen(31)));

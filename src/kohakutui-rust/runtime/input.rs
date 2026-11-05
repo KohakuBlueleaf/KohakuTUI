@@ -43,6 +43,7 @@ pub(crate) fn spawn(stop: Arc<AtomicBool>) -> (Receiver<InputEv>, Option<JoinHan
                         if matches!(
                             me.kind,
                             MouseEventKind::Down(MouseButton::Left)
+                                | MouseEventKind::Down(MouseButton::Middle)
                                 | MouseEventKind::ScrollUp
                                 | MouseEventKind::ScrollDown
                                 | MouseEventKind::Moved

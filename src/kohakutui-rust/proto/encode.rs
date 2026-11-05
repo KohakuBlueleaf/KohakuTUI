@@ -79,6 +79,13 @@ impl Op {
             ]),
             Op::Bell => map(vec![("op", "bell".into())]),
             Op::Copy { text } => map(vec![("op", "copy".into()), ("text", text.as_str().into())]),
+            Op::ShowDoc { id, note } => {
+                let mut m = vec![("op", "show_doc".into()), ("id", (*id).into())];
+                if let Some(n) = note {
+                    m.push(("note", n.as_str().into()));
+                }
+                map(m)
+            }
             Op::SetLinks { osc8 } => {
                 map(vec![("op", "set_links".into()), ("osc8", (*osc8).into())])
             }
@@ -152,6 +159,12 @@ impl Event {
                 map(vec![("ev", "copy".into()), ("text", text.as_str().into())])
             }
             Event::Link { url } => map(vec![("ev", "link".into()), ("url", url.as_str().into())]),
+            Event::Pane { id, width, collapsed } => map(vec![
+                ("ev", "pane".into()),
+                ("id", (*id).into()),
+                ("width", (*width).into()),
+                ("collapsed", (*collapsed).into()),
+            ]),
             Event::Error { id, message } => map(vec![
                 ("ev", "error".into()),
                 ("id", id.map_or(Value::Nil, Value::from)),
