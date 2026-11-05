@@ -44,7 +44,7 @@ dev = [
 [tool.maturin]
 python-source = "src"
 module-name = "kohakutui._rs"
-features = ["python", "highlight"]
+features = ["python"]
 include = ["src/kohakutui/**/*.pyi", "src/kohakutui/py.typed"]
 
 [tool.pytest.ini_options]
