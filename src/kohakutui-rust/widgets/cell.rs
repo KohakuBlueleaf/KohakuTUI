@@ -1,5 +1,6 @@
 //! `cell`: one transcript entry. Its header carries a role icon, title and status; its children
-//! render indented under it; a trailer line is printed when it seals.
+//! render indented under it; a trailer line is printed when it seals. A `collapsed` cell with a
+//! title folds to its header and one summary line until the full-screen view opens it.
 
 use std::any::Any;
 
@@ -45,6 +46,9 @@ pub struct Cell {
     /// Lets the streaming body (its last `markdown` child) reach scrollback before it seals.
     pub stream_flush: bool,
     pub icon: Option<String>,
+    pub collapsed: bool,
+    /// The folded cell's one line; the trailer (once sealed) when unset.
+    pub summary: Option<String>,
 }
 
 impl Default for Cell {
@@ -56,6 +60,8 @@ impl Default for Cell {
             trailer: None,
             stream_flush: false,
             icon: None,
+            collapsed: false,
+            summary: None,
         }
     }
 }
@@ -127,6 +133,32 @@ impl Cell {
         }
     }
 
+    /// Whether the cell can fold: it asks to and has a header to fold under.
+    pub fn foldable(&self) -> bool {
+        self.collapsed && self.title.is_some()
+    }
+
+    /// Whether the cell renders folded in this context.
+    pub fn folded(&self, ctx: &Ctx) -> bool {
+        self.foldable() && !ctx.expand_all
+    }
+
+    /// The folded cell's line under its header.
+    pub fn summary_lines(&self, width: u16, sealed: bool) -> Vec<Line<'static>> {
+        let text = match (&self.summary, &self.trailer) {
+            (Some(s), _) => s.clone(),
+            (None, Some(t)) if sealed => t.clone(),
+            _ if sealed => "done".to_owned(),
+            _ => "running…".to_owned(),
+        };
+        let spans = [
+            Span::styled("  ⎿  ", theme::muted()),
+            Span::raw(text),
+            Span::styled("  (ctrl+o to expand)", theme::muted()),
+        ];
+        wrap_spans(&spans, width as usize)
+    }
+
     pub fn body_style(&self) -> Style {
         match self.role {
             Role::Error => theme::danger(),
@@ -149,6 +181,8 @@ impl Component for Cell {
         upd_opt_str(p, "trailer", &mut self.trailer);
         upd_bool(p, "stream_flush", &mut self.stream_flush, false);
         upd_opt_str(p, "icon", &mut self.icon);
+        upd_bool(p, "collapsed", &mut self.collapsed, false);
+        upd_opt_str(p, "summary", &mut self.summary);
         Ok(())
     }
 

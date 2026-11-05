@@ -1,5 +1,6 @@
 //! `composer`: the chat input. Multi-line editing, history, a slash-command popup and paste-burst
-//! detection for terminals that deliver a paste as plain keys (design §7.2).
+//! detection for terminals that deliver a paste as plain keys (design §7.2). With `boxed` it
+//! draws inside a rounded border, Claude Code style.
 
 use std::any::Any;
 use std::time::{Duration, Instant};
@@ -9,7 +10,7 @@ use ratatui::text::{Line, Span};
 
 use super::editor::TextEditor;
 use super::picker::fuzzy_score;
-use super::props::{upd_opt_str, upd_strings};
+use super::props::{upd_bool, upd_opt_str, upd_strings};
 use super::text::truncate;
 use super::{Component, Ctx, Emit, Input, WidgetError};
 use crate::proto::value::{display, get, str_of};
@@ -32,6 +33,7 @@ pub struct Composer {
     popup_sel: usize,
     popup_hidden: bool,
     last_char: Option<Instant>,
+    boxed: bool,
 }
 
 impl Composer {
@@ -55,6 +57,16 @@ impl Composer {
             .collect();
         scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
         scored.into_iter().map(|(_, i)| i).collect()
+    }
+
+    /// Whether the input is exactly `/name` of the highlighted command.
+    fn exact_command(&self) -> bool {
+        let matches = self.matches();
+        let sel = self.popup_sel.min(matches.len().saturating_sub(1));
+        match (matches.get(sel), self.editor.text().strip_prefix('/')) {
+            (Some(&i), Some(typed)) => self.commands[i].0 == typed,
+            _ => false,
+        }
     }
 
     fn complete(&mut self) -> bool {
@@ -109,12 +121,36 @@ impl Composer {
         }
     }
 
+    /// The input rows and the caret within them, boxed or plain.
     fn input_lines(&self, width: u16) -> (Vec<Line<'static>>, (u16, u16)) {
+        const MIN_BOX: u16 = 8;
+        if !self.boxed || width < MIN_BOX {
+            return self.prompt_lines(width, "› ");
+        }
+
+        let inner = width - 4;
+        let (rows, (row, col)) = self.prompt_lines(inner, "> ");
+        let border = theme::muted();
+        let rule = "─".repeat(width as usize - 2);
+        let mut out = vec![Line::from(Span::styled(format!("╭{rule}╮"), border))];
+        for line in rows {
+            let pad = (inner as usize).saturating_sub(line.width());
+            let mut spans = vec![Span::styled("│ ", border)];
+            spans.extend(line.spans);
+            spans.push(Span::raw(" ".repeat(pad)));
+            spans.push(Span::styled(" │", border));
+            out.push(Line::from(spans));
+        }
+        out.push(Line::from(Span::styled(format!("╰{rule}╯"), border)));
+        (out, (row + 1, col + 2))
+    }
+
+    fn prompt_lines(&self, width: u16, prompt: &'static str) -> (Vec<Line<'static>>, (u16, u16)) {
         let avail = (width as usize).saturating_sub(2).max(1);
         let (lines, (row, col)) = self.editor.render(avail, Default::default());
         let mut out = Vec::new();
         for (i, line) in lines.into_iter().enumerate() {
-            let lead = if i == 0 { "› " } else { "  " };
+            let lead = if i == 0 { prompt } else { "  " };
             let mut spans = vec![Span::styled(lead, theme::user())];
             if self.editor.is_empty() {
                 let ph = self.placeholder.clone().unwrap_or_default();
@@ -136,6 +172,7 @@ impl Component for Composer {
     fn update(&mut self, p: &Value) -> Result<(), WidgetError> {
         upd_opt_str(p, "placeholder", &mut self.placeholder);
         upd_strings(p, "history", &mut self.history);
+        upd_bool(p, "boxed", &mut self.boxed, false);
         if let Some(cmds) = get(p, "commands") {
             self.commands = cmds
                 .as_array()
@@ -215,7 +252,7 @@ impl Component for Composer {
                 self.editor.insert("\n");
                 self.last_char = Some(at);
             }
-            KeyCode::Enter if popup => {
+            KeyCode::Enter if popup && !self.exact_command() => {
                 self.complete();
             }
             KeyCode::Enter => self.submit(out),
@@ -233,7 +270,11 @@ impl Component for Composer {
                 }
             }
             KeyCode::Down => {
+                // with no line below and no history to walk, ↓ leaves the input
                 if !self.editor.down() {
+                    if self.hist_pos.is_none() {
+                        return false;
+                    }
                     self.history_next();
                 }
             }

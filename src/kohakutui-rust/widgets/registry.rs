@@ -1,8 +1,8 @@
 //! Kind name to component: the only place a new kind is registered.
 
 use super::{
-    Card, Cell, Code, Component, Composer, Confirm, Divider, Footer, Kv, Log, Markdown, Picker,
-    Progress, Prompt, Sparkline, Stack, Status, Table, Text, WidgetError,
+    Button, Card, Cell, Chart, Code, Component, Composer, Confirm, Divider, Footer, Kv, Log,
+    Markdown, Picker, Progress, Prompt, Sparkline, Stack, Status, Table, Text, WidgetError,
 };
 use crate::proto::Value;
 
@@ -17,6 +17,7 @@ pub const KINDS: &[&str] = &[
     "status",
     "progress",
     "sparkline",
+    "chart",
     "kv",
     "table",
     "divider",
@@ -26,6 +27,7 @@ pub const KINDS: &[&str] = &[
     "confirm",
     "prompt",
     "card",
+    "button",
 ];
 
 /// Builds a component of `kind` and applies its initial props.
@@ -40,6 +42,7 @@ pub fn build(kind: &str, props: &Value) -> Result<Box<dyn Component>, WidgetErro
         "status" => Box::<Status>::default(),
         "progress" => Box::<Progress>::default(),
         "sparkline" => Box::<Sparkline>::default(),
+        "chart" => Box::<Chart>::default(),
         "kv" => Box::<Kv>::default(),
         "table" => Box::<Table>::default(),
         "divider" => Box::<Divider>::default(),
@@ -49,6 +52,7 @@ pub fn build(kind: &str, props: &Value) -> Result<Box<dyn Component>, WidgetErro
         "confirm" => Box::<Confirm>::default(),
         "prompt" => Box::<Prompt>::default(),
         "card" => Box::<Card>::default(),
+        "button" => Box::<Button>::default(),
         other => return Err(WidgetError::UnknownKind(other.to_owned())),
     };
     comp.update(props)?;

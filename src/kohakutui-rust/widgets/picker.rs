@@ -1,4 +1,6 @@
-//! `picker`: a filterable list. Typing filters by fuzzy subsequence; enter selects.
+//! `picker`: a filterable list. Typing filters by fuzzy subsequence; enter or a click selects;
+//! the wheel moves the selection. With `back`, ← at the start of the filter closes it with
+//! reason `back` (one level up in a stack of dialogs).
 
 use std::any::Any;
 
@@ -7,9 +9,9 @@ use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 
 use super::editor::TextEditor;
-use super::props::{upd_opt_str, upd_str, upd_usize};
+use super::props::{upd_bool, upd_opt_str, upd_str, upd_usize};
 use super::text::truncate;
-use super::{Component, Ctx, Emit, Input, WidgetError};
+use super::{Component, Ctx, Emit, Input, Mouse, MouseAct, WidgetError};
 use crate::proto::value::{display, get, str_of};
 use crate::proto::Value;
 use crate::text::{display_width, theme};
@@ -29,6 +31,7 @@ pub struct Picker {
     filter: TextEditor,
     selected: usize,
     max_visible: usize,
+    back: bool,
 }
 
 impl Default for Picker {
@@ -40,6 +43,7 @@ impl Default for Picker {
             filter: TextEditor::default(),
             selected: 0,
             max_visible: 10,
+            back: false,
         }
     }
 }
@@ -83,6 +87,17 @@ impl Picker {
         scored.into_iter().map(|(_, i)| i).collect()
     }
 
+    /// The row of the first listed item in `lines`.
+    fn first_item_row(&self) -> usize {
+        usize::from(!self.title.is_empty()) + 1
+    }
+
+    fn emit_selected(&self, out: &mut Vec<Emit>) {
+        if let Some(&i) = self.filtered().get(self.selected) {
+            out.push(Emit::Select { index: i as u32, value: self.items[i].value.clone() });
+        }
+    }
+
     fn window(&self, count: usize) -> (usize, usize) {
         let vis = self.max_visible.max(1).min(count.max(1));
         let start = self
@@ -102,6 +117,7 @@ impl Component for Picker {
         upd_str(p, "title", &mut self.title);
         upd_opt_str(p, "placeholder", &mut self.placeholder);
         upd_usize(p, "max_visible", &mut self.max_visible, 10);
+        upd_bool(p, "back", &mut self.back, false);
         if let Some(items) = get(p, "items") {
             self.items = items
                 .as_array()
@@ -205,13 +221,9 @@ impl Component for Picker {
                         self.selected =
                             (self.selected + self.max_visible).min(count.saturating_sub(1))
                     }
-                    KeyCode::Enter => {
-                        if let Some(&i) = self.filtered().get(self.selected) {
-                            out.push(Emit::Select {
-                                index: i as u32,
-                                value: self.items[i].value.clone(),
-                            });
-                        }
+                    KeyCode::Enter => self.emit_selected(out),
+                    KeyCode::Left if self.back && self.filter.cursor() == 0 => {
+                        out.push(Emit::Close("back".into()))
                     }
                     KeyCode::Backspace => {
                         self.filter.backspace();
@@ -229,6 +241,26 @@ impl Component for Picker {
                     }
                     _ => return false,
                 }
+            }
+        }
+        true
+    }
+
+    fn on_mouse(&mut self, m: &Mouse, out: &mut Vec<Emit>) -> bool {
+        let count = self.filtered().len();
+        match m.act {
+            MouseAct::ScrollUp => self.selected = self.selected.saturating_sub(1),
+            MouseAct::ScrollDown => {
+                self.selected = (self.selected + 1).min(count.saturating_sub(1))
+            }
+            MouseAct::Click => {
+                let (start, end) = self.window(count);
+                let row = (m.row as usize).checked_sub(self.first_item_row());
+                let Some(row) = row.filter(|r| *r < end - start) else {
+                    return false;
+                };
+                self.selected = start + row;
+                self.emit_selected(out);
             }
         }
         true

@@ -3,7 +3,9 @@
 //! A component renders itself as lines at a width and handles the keys sent to it while focused.
 //! Containers (`stack`, `cell`) render only their own header; the view lays out their children.
 
+mod button;
 mod cell;
+mod chart;
 mod composer;
 mod data;
 mod dialogs;
@@ -27,7 +29,9 @@ use thiserror::Error;
 
 use crate::proto::Value;
 
+pub use button::Button;
 pub use cell::{Cell, Role};
+pub use chart::Chart;
 pub use composer::Composer;
 pub use data::{Footer, Kv, Table};
 pub use dialogs::{Card, Confirm, Prompt};
@@ -46,15 +50,21 @@ pub struct Ctx {
     /// When the engine started; animation frames count from here.
     pub epoch: Instant,
     pub focused: bool,
+    /// Folded (collapsed) cells render in full: the full-screen transcript opened them.
+    pub expand_all: bool,
 }
 
 impl Ctx {
     pub fn new(now: Instant, epoch: Instant) -> Self {
-        Ctx { now, epoch, focused: false }
+        Ctx { now, epoch, focused: false, expand_all: false }
     }
 
     pub fn focused(self, focused: bool) -> Self {
         Ctx { focused, ..self }
+    }
+
+    pub fn expanded(self, expand_all: bool) -> Self {
+        Ctx { expand_all, ..self }
     }
 
     /// Milliseconds since the engine started.
@@ -72,6 +82,23 @@ pub enum Input {
         at: Instant,
     },
     Paste(String),
+}
+
+/// What a mouse did to a component.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MouseAct {
+    Click,
+    ScrollUp,
+    ScrollDown,
+}
+
+/// A mouse event in a component's own line coordinates, at the width it was drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Mouse {
+    pub act: MouseAct,
+    pub row: u16,
+    pub col: u16,
+    pub width: u16,
 }
 
 /// A semantic event a component raises; the view adds the node id.
@@ -117,6 +144,10 @@ pub trait Component: Send + Any {
     }
     /// Handles input while focused; returns whether it consumed it.
     fn on_input(&mut self, _input: &Input, _out: &mut Vec<Emit>) -> bool {
+        false
+    }
+    /// Handles a click or wheel step on the component; returns whether it used it.
+    fn on_mouse(&mut self, _mouse: &Mouse, _out: &mut Vec<Emit>) -> bool {
         false
     }
     /// The caret as (row, col) within `lines(width)`, for the terminal cursor (IME).

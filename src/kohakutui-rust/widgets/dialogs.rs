@@ -8,7 +8,7 @@ use ratatui::text::{Line, Span};
 
 use super::editor::TextEditor;
 use super::props::{upd_bool, upd_opt_str, upd_str};
-use super::{Component, Ctx, Emit, Input, WidgetError};
+use super::{Component, Ctx, Emit, Input, Mouse, MouseAct, WidgetError};
 use crate::proto::value::{display, get, str_of};
 use crate::proto::Value;
 use crate::text::{clip, display_width, render_markdown, theme, wrap_text};
@@ -79,11 +79,27 @@ impl Component for Confirm {
             KeyCode::Left | KeyCode::Right | KeyCode::Tab | KeyCode::BackTab => {
                 self.choice = !self.choice
             }
-            KeyCode::Char('h') => self.choice = true,
-            KeyCode::Char('l') => self.choice = false,
             KeyCode::Enter => out.push(Emit::Submit(Value::Boolean(self.choice))),
             _ => return false,
         }
+        true
+    }
+
+    fn on_mouse(&mut self, m: &Mouse, out: &mut Vec<Emit>) -> bool {
+        let row = wrap_text(&self.question, theme::bold(), m.width as usize).len();
+        if m.act != MouseAct::Click || m.row as usize != row {
+            return false;
+        }
+        let yes_end = display_width(&self.yes) + 2;
+        let no_start = yes_end + 2;
+        let col = m.col as usize;
+        let answer = match col {
+            c if c < yes_end => true,
+            c if (no_start..no_start + display_width(&self.no) + 2).contains(&c) => false,
+            _ => return false,
+        };
+        self.choice = answer;
+        out.push(Emit::Submit(Value::Boolean(answer)));
         true
     }
 
@@ -222,13 +238,54 @@ fn edit(ed: &mut TextEditor, input: &Input, multiline: bool, out: &mut Vec<Emit>
     }
 }
 
-/// A titled Markdown body with action buttons; selecting an action emits its id.
+/// A titled Markdown body with action buttons; selecting an action (enter, its digit or a
+/// click) emits its id. With `back`, ← closes it with reason `back` and → / tab move.
 #[derive(Debug, Default)]
 pub struct Card {
     title: Option<String>,
     body: String,
     actions: Vec<(String, String)>,
     selected: usize,
+    back: bool,
+}
+
+impl Card {
+    /// Lines above the buttons at `width`.
+    fn text_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let mut out = Vec::new();
+        if let Some(t) = &self.title {
+            out.extend(wrap_text(t, theme::bold(), width as usize));
+        }
+        if !self.body.trim().is_empty() {
+            out.extend(
+                render_markdown(&self.body, width as usize)
+                    .into_iter()
+                    .map(|l| l.line),
+            );
+        }
+        out
+    }
+
+    /// Each button's (row, first col, end col) below the text, wrapping like `lines`.
+    fn button_spots(&self, width: u16) -> Vec<(usize, usize, usize)> {
+        let (mut row, mut used) = (0, 0);
+        let mut out = Vec::new();
+        for (_, label) in &self.actions {
+            let w = display_width(label) + 4;
+            if used + w > width as usize && used > 0 {
+                row += 1;
+                used = 0;
+            }
+            out.push((row, used, used + w - 2));
+            used += w;
+        }
+        out
+    }
+
+    fn choose(&self, i: usize, out: &mut Vec<Emit>) {
+        let value = Value::from(self.actions[i].0.as_str());
+        out.push(Emit::Select { index: i as u32, value });
+    }
 }
 
 impl Component for Card {
@@ -239,6 +296,7 @@ impl Component for Card {
     fn update(&mut self, p: &Value) -> Result<(), WidgetError> {
         upd_opt_str(p, "title", &mut self.title);
         upd_str(p, "body", &mut self.body);
+        upd_bool(p, "back", &mut self.back, false);
         if let Some(actions) = get(p, "actions") {
             self.actions = actions
                 .as_array()
@@ -267,17 +325,7 @@ impl Component for Card {
     }
 
     fn lines(&self, width: u16, _ctx: &Ctx) -> Vec<Line<'static>> {
-        let mut out = Vec::new();
-        if let Some(t) = &self.title {
-            out.extend(wrap_text(t, theme::bold(), width as usize));
-        }
-        if !self.body.trim().is_empty() {
-            out.extend(
-                render_markdown(&self.body, width as usize)
-                    .into_iter()
-                    .map(|l| l.line),
-            );
-        }
+        let mut out = self.text_lines(width);
         if !self.actions.is_empty() {
             let mut spans = Vec::new();
             let mut used = 0;
@@ -309,23 +357,35 @@ impl Component for Card {
             return false;
         }
         match code {
+            KeyCode::Left if self.back => out.push(Emit::Close("back".into())),
             KeyCode::Left | KeyCode::BackTab => self.selected = (self.selected + n - 1) % n,
             KeyCode::Right | KeyCode::Tab => self.selected = (self.selected + 1) % n,
-            KeyCode::Enter => out.push(Emit::Select {
-                index: self.selected as u32,
-                value: Value::from(self.actions[self.selected].0.as_str()),
-            }),
-            KeyCode::Char(c) if c.is_ascii_digit() && *c != '0' => {
-                let i = (*c as u8 - b'1') as usize;
-                if i < n {
-                    out.push(Emit::Select {
-                        index: i as u32,
-                        value: Value::from(self.actions[i].0.as_str()),
-                    });
-                }
+            KeyCode::Enter => self.choose(self.selected, out),
+            KeyCode::Char(c @ '1'..='9') if ((*c as u8 - b'1') as usize) < n => {
+                self.choose((*c as u8 - b'1') as usize, out)
             }
             _ => return false,
         }
+        true
+    }
+
+    fn on_mouse(&mut self, m: &Mouse, out: &mut Vec<Emit>) -> bool {
+        if m.act != MouseAct::Click {
+            return false;
+        }
+        let Some(row) = (m.row as usize).checked_sub(self.text_lines(m.width).len()) else {
+            return false;
+        };
+        let col = m.col as usize;
+        let spots = self.button_spots(m.width);
+        let hit = spots
+            .iter()
+            .position(|(r, a, b)| *r == row && (*a..*b).contains(&col));
+        let Some(i) = hit else {
+            return false;
+        };
+        self.selected = i;
+        self.choose(i, out);
         true
     }
 

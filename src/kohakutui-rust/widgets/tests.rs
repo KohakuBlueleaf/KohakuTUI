@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use crossterm::event::{KeyCode, KeyModifiers};
 
-use super::{build, Component, Ctx, Emit, Input, TextEditor, KINDS};
+use super::{build, Component, Ctx, Emit, Input, Mouse, MouseAct, TextEditor, KINDS};
 use crate::proto::value::map;
 use crate::proto::Value;
 use crate::text::{display_width, plain};
@@ -125,6 +125,129 @@ fn composer_burst_needs_keys_close_together_not_just_a_fast_enter() {
     assert_eq!(out, vec![Emit::Submit("hi".into())]);
 }
 
+fn click(row: u16, col: u16, width: u16) -> Mouse {
+    Mouse { act: MouseAct::Click, row, col, width }
+}
+
+#[test]
+fn a_picker_selects_the_clicked_row_and_scrolls_with_the_wheel() {
+    let items = Value::Array(vec!["alpha".into(), "beta".into(), "gamma".into()]);
+    let props = map(vec![("title", "Pick".into()), ("items", items)]);
+    let mut p = build("picker", &props).unwrap();
+    let mut out = Vec::new();
+
+    // rows: title, filter, alpha, beta, gamma, hint
+    assert!(!p.on_mouse(&click(1, 3, 30), &mut out), "the filter row selects nothing");
+    assert!(!p.on_mouse(&click(5, 3, 30), &mut out), "neither does the hint");
+    assert!(p.on_mouse(&click(3, 3, 30), &mut out));
+    assert_eq!(out, vec![Emit::Select { index: 1, value: "beta".into() }]);
+
+    let wheel = Mouse { act: MouseAct::ScrollDown, row: 0, col: 0, width: 30 };
+    p.on_mouse(&wheel, &mut out);
+    assert!(texts(p.as_ref(), 30).contains(&"› gamma".to_owned()));
+}
+
+#[test]
+fn card_and_confirm_buttons_answer_a_click() {
+    let actions = Value::Array(vec!["Back".into(), "Kill".into()]);
+    let props = map(vec![("title", "Task".into()), ("actions", actions)]);
+    let mut card = build("card", &props).unwrap();
+    let mut out = Vec::new();
+    let shown = texts(card.as_ref(), 30);
+    let kill_col = shown[1].find("Kill").unwrap() as u16;
+    assert!(!card.on_mouse(&click(0, kill_col, 30), &mut out), "the title is not a button");
+    assert!(card.on_mouse(&click(1, kill_col, 30), &mut out));
+    assert_eq!(out, vec![Emit::Select { index: 1, value: "Kill".into() }]);
+
+    let mut confirm = build("confirm", &map(vec![("question", "Sure?".into())])).unwrap();
+    out.clear();
+    assert!(confirm.on_mouse(&click(1, 1, 30), &mut out));
+    assert_eq!(out, vec![Emit::Submit(Value::Boolean(true))]);
+}
+
+#[test]
+fn back_makes_left_close_a_picker_or_card_with_reason_back() {
+    let left = [(KeyCode::Left, KeyModifiers::NONE)];
+    let back = vec![Emit::Close("back".into())];
+    let items = Value::Array(vec!["a".into()]);
+    let mut p = build("picker", &map(vec![("items", items), ("back", true.into())])).unwrap();
+    assert_eq!(keys(p.as_mut(), &left, TYPED), back);
+    keys(p.as_mut(), &chars("ab"), TYPED);
+    assert!(keys(p.as_mut(), &left, TYPED).is_empty(), "inside the filter ← moves the caret");
+
+    let actions = Value::Array(vec!["x".into(), "y".into()]);
+    let card_props = map(vec![("actions", actions), ("back", true.into())]);
+    let mut card = build("card", &card_props).unwrap();
+    assert_eq!(keys(card.as_mut(), &left, TYPED), back);
+}
+
+#[test]
+fn a_button_highlights_when_focused_and_selects_on_enter() {
+    let props = map(vec![
+        ("label", "2 tasks".into()),
+        ("hint", "↓ to view".into()),
+        ("focused_hint", "enter to view".into()),
+        ("value", "tasks".into()),
+    ]);
+    let mut b = build("button", &props).unwrap();
+    assert_eq!(texts(b.as_ref(), 40), vec!["2 tasks · ↓ to view"]);
+    let lines = b.lines(40, &ctx().focused(true));
+    assert_eq!(plain(&lines[0]), " 2 tasks  · enter to view");
+
+    let enter = [(KeyCode::Enter, KeyModifiers::NONE)];
+    let selected = vec![Emit::Select { index: 0, value: "tasks".into() }];
+    assert_eq!(keys(b.as_mut(), &enter, TYPED), selected);
+    let typed = keys(b.as_mut(), &chars("x"), TYPED);
+    assert!(typed.is_empty(), "a button takes no text");
+}
+
+#[test]
+fn composer_lets_down_go_when_it_has_nothing_below() {
+    let mut c = build("composer", &Value::Map(vec![])).unwrap();
+    let mut out = Vec::new();
+    let down = Input::Key { code: KeyCode::Down, mods: KeyModifiers::NONE, at: Instant::now() };
+    assert!(!c.on_input(&down, &mut out), "an empty input with no history lets ↓ through");
+}
+
+#[test]
+fn dialogs_leave_unused_letters_and_digits_for_the_input() {
+    let mut confirm = build("confirm", &map(vec![("question", "Sure?".into())])).unwrap();
+    let mut out = Vec::new();
+    let at = Instant::now();
+    let key = |c: char| Input::Key { code: KeyCode::Char(c), mods: KeyModifiers::NONE, at };
+    assert!(!confirm.on_input(&key('h'), &mut out), "only y and n are confirm's letters");
+    assert!(confirm.on_input(&key('y'), &mut out));
+
+    let actions = Value::Array(vec!["a".into(), "b".into()]);
+    let mut card = build("card", &map(vec![("actions", actions)])).unwrap();
+    assert!(!card.on_input(&key('7'), &mut out), "a digit with no button is not the card's");
+    assert!(card.on_input(&key('2'), &mut out));
+}
+
+#[test]
+fn a_boxed_composer_draws_its_border_and_keeps_the_caret_inside() {
+    let props = map(vec![("boxed", true.into()), ("placeholder", "ask".into())]);
+    let mut c = build("composer", &props).unwrap();
+    assert_eq!(texts(c.as_ref(), 12), vec!["╭──────────╮", "│ > ask    │", "╰──────────╯"]);
+    assert_eq!(c.cursor(12), Some((1, 4)));
+
+    keys(c.as_mut(), &chars("abcdefghij"), TYPED);
+    let out = texts(c.as_ref(), 12);
+    assert_eq!(out.len(), 4, "a long line wraps inside the box: {out:#?}");
+    assert!(out.iter().all(|l| display_width(l) == 12), "{out:#?}");
+    assert_eq!(texts(c.as_ref(), 6), vec!["› abcd", "  efgh", "  ij"], "too narrow to box");
+}
+
+#[test]
+fn composer_submits_a_command_typed_in_full() {
+    let cmds = Value::Array(vec![map(vec![("name", "model".into())]), "mode".into()]);
+    let mut c = build("composer", &map(vec![("commands", cmds)])).unwrap();
+    let mut seq = chars("/model");
+    seq.push((KeyCode::Enter, KeyModifiers::NONE));
+    let out = keys(c.as_mut(), &seq, TYPED);
+    assert_eq!(out, vec![Emit::Submit("/model".into())]);
+}
+
 #[test]
 fn composer_completes_a_slash_command_before_submitting() {
     let cmds = Value::Array(vec![
@@ -189,6 +312,42 @@ fn sparkline_marks_nan_as_a_gap() {
         .unwrap();
     let line = &texts(s.as_ref(), 40)[0];
     assert!(line.starts_with("loss █·▁"), "{line:?}");
+}
+
+#[test]
+fn chart_keeps_the_whole_run_and_draws_it_across_the_width() {
+    let mut c = build("chart", &map(vec![("label", "loss".into()), ("height", 4.into())])).unwrap();
+    let falling: Vec<Value> = (0..1000)
+        .map(|i| Value::F64(10.0 - i as f64 / 100.0))
+        .collect();
+    c.append(&map(vec![("loss", Value::Array(falling))]))
+        .unwrap();
+    c.append(&map(vec![("ema", 5.into())])).unwrap();
+
+    let out = texts(c.as_ref(), 40);
+    assert_eq!(out.len(), 1 + 4 + 1, "header, 4 plot rows, x axis: {out:#?}");
+    assert!(out[0].starts_with("loss  ■ loss 0.0100  ■ ema 5.0000"), "{out:#?}");
+    assert!(out.iter().all(|l| display_width(l) <= 40), "{out:#?}");
+    assert!(out[5].ends_with("1000"), "the x axis spans the whole run: {out:#?}");
+
+    let top = out[1].chars().skip_while(|c| *c != '┤').nth(1);
+    assert!(top.is_some_and(|c| c != ' '), "the curve starts at the top left: {out:#?}");
+    let bottom_last = out[4].trim_end().chars().last();
+    assert!(bottom_last.is_some_and(|c| ('\u{2800}'..='\u{28ff}').contains(&c)), "{out:#?}");
+}
+
+#[test]
+fn chart_halves_its_points_past_max_points_but_keeps_counting() {
+    let props = map(vec![("label", "x".into()), ("max_points", 100.into())]);
+    let mut c = build("chart", &props).unwrap();
+    for i in 0..1000 {
+        c.append(&Value::F64(f64::from(i))).unwrap();
+    }
+    c.append(&Value::F64(f64::NAN)).unwrap();
+    let out = texts(c.as_ref(), 40);
+    assert!(out[0].contains("(1 nan)"), "{out:#?}");
+    assert!(out.last().unwrap().ends_with("1001"), "{out:#?}");
+    assert!(c.append(&"text".into()).is_err());
 }
 
 #[test]
