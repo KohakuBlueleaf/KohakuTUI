@@ -106,6 +106,9 @@ answer = app.run_dialog(ktui.Scroll(
 | pgup/pgdn, ctrl+home/ctrl+end | scroll the full-screen transcript, jump to its top or back to following its end |
 | ctrl+↑ (full screen) | keyboard navigation over foldable headers: ↑↓ or j/k move, enter or space toggle, esc leaves |
 | mouse (full screen) | wheel scrolls (a scroll box under the pointer first), click toggles a header, hover highlights it, drag selects and copies |
+| F6 / shift+F6 (full screen) | move the keys to the next / previous area: document, head row, panes, bottom |
+| alt+←/→ (full screen, keys in a pane) | move that pane's divider |
+| pane divider (full screen) | drag resizes, double-click collapses, a click on a collapsed strip opens it |
 
 `app.bind("ctrl+b", "jobs")` turns a chord into an `action` event named `jobs`;
 `app.unbind(chord)` removes it.

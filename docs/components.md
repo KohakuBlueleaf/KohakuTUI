@@ -196,6 +196,47 @@ Typing into a `number` replaces its value; a focused `text` field draws a caret.
 
 One status line: `left` and `right` text.
 
+## Full-screen chrome
+
+Drawn in full screen only, so an inline app can build them and lose nothing.
+
+### `Pane`
+
+A side column under `app.panels`: `side` `"left"` or `"right"`, `width` columns (at least
+`min`), `title`, `collapsed` to a one-column strip. Children stack inside; the wheel scrolls
+it. The user drags its divider, double-clicks the divider to collapse it, clicks the strip
+to open it, and, with keys inside it, moves the divider with alt+←/→. Each change is a `pane`
+event (`id`, `width`, `collapsed`) for the app to remember. When the main pane would get
+narrower than 30 columns, panes collapse for that frame (right ones first).
+
+```python
+rail = app.panels.add(Pane(side="left", width=24, title="Agents"))
+tree = rail.add(Tree(items=[{"label": "root", "value": "root"}]))
+```
+
+### `TabStrip`
+
+A row of tabs, usually in `app.head`: `tabs` as `[{"label", "value", "dot", "badge",
+"closable"}]` (`dot` a tone for a status dot, `badge` a count), `active` the index. Click or
+←/→ selects (`select` with the value), a middle click or ctrl+w on a closable tab closes it
+(`close` with the value as the reason). A strip wider than its row scrolls by whole tabs
+behind `‹` / `›`.
+
+### `Tree`
+
+An outline: `items` as `[{"label", "value", "detail", "icon", "tone", "open", "children"}]`.
+↑↓ move, → opens, ← closes or steps out, enter or a click selects (`select` with the value),
+a click on ▸ toggles. `children: True` (no list) can open and sends `change` with
+`{"expand": value}` so the app can fill it in. `height` keeps that many rows; `selected`
+moves the cursor to a value.
+
+### Follow and focus
+
+Scrolled up, the full-screen transcript stays where it is while messages arrive below, and
+the "↓ N new" line counts them (ctrl+end goes back to following). The last user message
+above the view stays on its top row. F6 / shift+F6 move the keys between areas: the
+document, the head row, each open pane and the bottom.
+
 ## Dialogs
 
 `Picker`, `Prompt`, `Confirm`, `Card` and `Scroll` are dialogs when added to `app.overlays` or

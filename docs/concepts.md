@@ -20,15 +20,25 @@ keystroke, so typing stays smooth while Python is busy.
 
 ## Regions
 
-The screen is five fixed regions. Every node lives in one of them.
+The screen is a few fixed regions. Every node lives in one of them.
 
 | Region | Holds | Inline | Full screen |
 | ------ | ----- | ------ | ----------- |
 | `transcript` | the record of what happened: results, logs, messages, finished charts | written to scrollback once sealed | the scrollable main pane |
 | `live` | what is happening now: spinners, progress, running tools | redrawn above the bottom | under the main pane |
 | `bottom` | input and status: composer, buttons, footer | always at the bottom | bottom |
-| `panels` | side information | hidden | right-hand pane |
+| `panels` | side information: `Pane` columns (or anything else, drawn as a right third) | hidden | side panes |
+| `head` | a row over the transcript, usually a `TabStrip` | hidden | above the main pane |
 | `overlays` | dialogs | at the input, or above it | at the input (docked) or a centred box |
+
+### Documents
+
+`app.transcript` is one document. `app.add_document()` makes another: add cells to it the
+same way. `app.show_document(doc, note=None)` puts it where the transcript is: only the shown
+document is drawn, takes keys and (inline) reaches scrollback; a hidden one keeps changing and
+writes its unflushed lines when shown again, after `note` (a divider such as `── planner ──`
+that belongs to the switch, not to either document). Full screen keeps each document's scroll.
+A conversation app gives each conversation (an agent, a channel) its own document.
 
 ## Nodes
 
