@@ -6,8 +6,6 @@ Python describes *what* is on screen as a tree of nodes. Rust owns the terminal,
 and every keystroke, so streaming output never flickers or reflows, and typing stays smooth
 while Python is busy.
 
-> Status: **early development.** The API is not stable yet.
-
 ## What it is for
 
 - **Agent front ends.** An inline mode where finished output goes to the terminal's real
@@ -18,23 +16,26 @@ while Python is busy.
 ## Try it
 
 ```bash
-python -m kohakutui demo chat    # streamed Markdown, a composer, /model picker, ctrl+t
-python -m kohakutui demo train   # progress, a loss sparkline, captured print output
-python -m kohakutui reset        # fix a terminal left in raw mode
+python -m kohakutui demo agent      # a coding-agent turn: folded tool calls (ctrl+o), an
+                                    # approval card, background tasks (↓ or ctrl+b), ctrl+t
+python -m kohakutui demo dashboard  # full-screen training monitor: charts, eval table, GPU panel
+python -m kohakutui demo chat       # streamed Markdown, a composer, /model picker
+python -m kohakutui demo train      # inline training: a loss chart that lands in scrollback at the end
+python -m kohakutui reset           # fix a terminal left in raw mode
 ```
 
 ## Using it
 
 ```python
-import kohakutui as kt
+import kohakutui as ktui
 
-with kt.App() as app:
-    composer = app.bottom.add(kt.Composer(placeholder="say something"))
+with ktui.App() as app:
+    composer = app.bottom.add(ktui.Composer(placeholder="say something"))
 
     @app.on("submit", composer)
     def reply(ev):
-        cell = app.transcript.add(kt.Cell(role="assistant", stream_flush=True))
-        body = cell.add(kt.Markdown(streaming=True))
+        cell = app.transcript.add(ktui.Cell(role="assistant", stream_flush=True))
+        body = cell.add(ktui.Markdown(streaming=True))
         for token in ["**Hello** ", "from ", "Rust\n"]:
             body.append(token)
         cell.seal()  # the whole cell is now in the terminal's scrollback
@@ -54,7 +55,7 @@ The screen has five regions, each a node you add children to:
 
 Nodes change with `update(**props)`, stream with `append(data)`, finish with `seal()`, and move
 with `move(parent)`. Events arrive through `@app.on(kind, node)`, `app.events()`,
-`async for ev in app.aevents()`, or a `kt.Widget` subclass that owns its nodes. Everything runs
+`async for ev in app.aevents()`, or a `ktui.Widget` subclass that owns its nodes. Everything runs
 headless with `App(backend="test", size=(80, 24))`, whose `screen()` and `history()` read the
 emulated terminal.
 
