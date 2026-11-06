@@ -203,7 +203,17 @@ pub fn handle_mouse(
     const WHEEL: usize = 3;
     vs.track_overlay(m.top_overlay());
     if let Some(top) = m.top_overlay() {
-        return overlay_mouse(m, vs, top, kind, col, row, events);
+        if overlay_mouse(m, vs, top, kind, col, row, events) {
+            return true;
+        }
+        // a press away from the dialog closes it (as esc would) and goes on to what it hit,
+        // so a dialog never holds the rest of the screen hostage
+        let press = matches!(kind, MouseEventKind::Down(MouseButton::Left | MouseButton::Middle));
+        if !press || vs.mode != Mode::Fullscreen || on_dialog(m, vs, top, col, row) {
+            return false;
+        }
+        events.push(Event::Close { id: top, reason: "escape".into() });
+        vs.overlay_blur = None;
     }
     if vs.mode != Mode::Fullscreen {
         return false;
@@ -340,6 +350,24 @@ fn navigate(
         }
     }
     Some(Outcome::Redraw)
+}
+
+/// Whether a press lands on the dialog's box (its frame included) or, docked, anywhere in the
+/// input area it took over.
+fn on_dialog(m: &Model, vs: &ViewState, top: NodeId, col: u16, row: u16) -> bool {
+    if super::layout::docked_overlay(m) == Some(top) {
+        let b = vs.bottom_area;
+        if col >= b.x && col < b.x + b.width && row >= b.y && row < b.y + b.height {
+            return true;
+        }
+    }
+    let Some((_, y, x, w, h)) = vs.overlay_hit.filter(|hit| hit.0 == top) else {
+        // not drawn yet: nothing to tell, keep it
+        return true;
+    };
+    let (row, col) = (i32::from(row), i32::from(col));
+    let (x, w) = (i32::from(x), i32::from(w));
+    row >= y - 2 && row < y + i32::from(h) + 2 && col >= x - 2 && col < x + w + 2
 }
 
 fn overlay_mouse(

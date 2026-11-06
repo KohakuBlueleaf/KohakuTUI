@@ -34,6 +34,10 @@ running job) can keep changing. Blocking forms must not run on the event pump th
 - esc closes a dialog with reason `escape`; the program decides what that means (hide a question
   until later, cancel a choice).
 
+In full screen a mouse press away from the dialog closes it (a `close` event with reason
+`escape`, as esc gives) and then reaches what it landed on, so a click on another list entry
+or a tab is never swallowed by an open prompt or picker.
+
 ## Picker
 
 A fuzzy-filtered list.

@@ -1,7 +1,7 @@
 """Full-screen chrome end to end on the test backend: documents, panes, the head tab strip,
 trees, follow with "↓ N new", the sticky prompt and pane focus keys."""
 
-from kohakutui import App, Cell, Composer, Pane, TabStrip, Text, Tree
+from kohakutui import App, Cell, Composer, Pane, Prompt, TabStrip, Text, Tree
 from tests.conftest import until
 
 
@@ -20,7 +20,9 @@ class TestFullscreen:
         with App(backend="test", size=(60, 10), interrupt="event") as app:
             other = app.add_document()
             other.add(Cell(role="assistant", children=[Text("in other")])).seal()
-            app.transcript.add(Cell(role="assistant", children=[Text("in main")])).seal()
+            app.transcript.add(
+                Cell(role="assistant", children=[Text("in main")])
+            ).seal()
             until(app, lambda: "● in main" in app.history())
             assert "● in other" not in app.history()
             app.show_document(other, "── other ──")
@@ -44,7 +46,14 @@ class TestFullscreen:
             for kind in ("pane", "select", "close"):
                 app.on(kind)(lambda ev, k=kind: events.append((k, dict(ev.data))))
             rail = app.panels.add(Pane(side="left", width=20, title="Rail"))
-            rail.add(Tree(items=[{"label": "alpha", "value": "a"}, {"label": "beta", "value": "b"}]))
+            rail.add(
+                Tree(
+                    items=[
+                        {"label": "alpha", "value": "a"},
+                        {"label": "beta", "value": "b"},
+                    ]
+                )
+            )
             aux = app.panels.add(Pane(side="right", width=24, title="Aux"))
             aux.add(Text("aux body"))
             app.transcript.add(Cell(role="assistant", children=[Text("chat")]))
@@ -66,7 +75,14 @@ class TestFullscreen:
             # a click in the tree selects; the wheel over the transcript does not move panes
             x, y = _row(app, "beta")
             app.inject({"click": (x, y)})
-            until(app, lambda: ("select", {"id": events[-1][1].get("id"), "index": 1, "value": "b"}) in events)
+            until(
+                app,
+                lambda: (
+                    "select",
+                    {"id": events[-1][1].get("id"), "index": 1, "value": "b"},
+                )
+                in events,
+            )
 
             # too narrow: the right pane becomes a strip, the transcript keeps its room
             app.inject({"resize": (70, 20)})
@@ -80,7 +96,10 @@ class TestFullscreen:
             events: list[tuple[str, object]] = []
             app.on("select")(lambda ev: events.append(("select", ev.data.get("value"))))
             app.on("close")(lambda ev: events.append(("close", ev.data.get("reason"))))
-            tabs = [{"label": f"tab{i}", "value": f"t{i}", "closable": i > 0} for i in range(8)]
+            tabs = [
+                {"label": f"tab{i}", "value": f"t{i}", "closable": i > 0}
+                for i in range(8)
+            ]
             strip = app.head.add(TabStrip(tabs=tabs))
             until(app, lambda: "tab0" in app.screen()[0])
             x, _ = _row(app, "tab2")
@@ -110,7 +129,9 @@ class TestFullscreen:
         ) as app:
             for i in range(30):
                 if i % 10 == 0:
-                    app.transcript.add(Cell(role="user", children=[Text(f"prompt {i // 10}")]))
+                    app.transcript.add(
+                        Cell(role="user", children=[Text(f"prompt {i // 10}")])
+                    )
                 app.transcript.add(Cell(role="assistant", children=[Text(f"line {i}")]))
             app.bottom.add(Composer())
             until(app, lambda: "line 29" in _screen(app))
@@ -139,8 +160,44 @@ class TestFullscreen:
             composer = app.bottom.add(Composer())
             composer.focus()
             until(app, lambda: "one" in _screen(app))
-            app.inject({"key": "f6"})  # composer → the tree (the next area that takes keys)
+            app.inject(
+                {"key": "f6"}
+            )  # composer → the tree (the next area that takes keys)
             app.inject({"key": "alt+right"})
             until(app, lambda: events and events[-1]["width"] == 22)
             assert events[-1]["id"] == rail.id
             assert tree.id  # the tree held the keys: the resize went to its pane
+
+    def test_a_press_away_from_a_dialog_closes_it_and_reaches_what_it_hit(self):
+        with App(
+            backend="test", size=(90, 20), interrupt="event", mode="fullscreen"
+        ) as app:
+            events: list[tuple[str, int, object]] = []
+            app.on("close")(
+                lambda ev: events.append(("close", ev.id, ev.data.get("reason")))
+            )
+            app.on("select")(
+                lambda ev: events.append(("select", ev.id, ev.data.get("value")))
+            )
+            rail = app.panels.add(Pane(side="left", width=20))
+            tree = rail.add(
+                Tree(
+                    items=[
+                        {"label": "alpha", "value": "a"},
+                        {"label": "beta", "value": "b"},
+                    ]
+                )
+            )
+            app.bottom.add(Composer())
+            prompt = app.overlays.add(Prompt(question="a key?", dock="input"))
+            until(app, lambda: "a key?" in _screen(app))
+            # a press on the dialog itself keeps it
+            x, y = _row(app, "a key?")
+            app.inject({"click": (x, y)})
+            app.sync()
+            assert not any(e[0] == "close" for e in events)
+            # a press on the rail: the dialog closes as with esc, and the tree takes the click
+            x, y = _row(app, "beta")
+            app.inject({"click": (x, y)})
+            until(app, lambda: ("select", tree.id, "b") in events)
+            assert ("close", prompt.id, "escape") in events
