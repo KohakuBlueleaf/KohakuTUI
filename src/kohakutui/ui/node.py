@@ -47,7 +47,8 @@ class Node:
         return Node(self.app, ops[0]["id"], spec.kind)
 
     def update(self, **props: Any) -> "Node":
-        """Changes props; a prop set to None returns to its default."""
+        """Changes props; a prop set to None returns to its default. Every kind takes
+        ``hidden=True``: not drawn, focused or given keys, its state kept."""
         self.app.send([{"op": "update", "id": self.id, "props": props}])
         return self
 

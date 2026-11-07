@@ -31,6 +31,8 @@ from kohakutui.ui.components import (
     Tabs,
     Text,
     Tree,
+    Diff,
+    Image,
 )
 from kohakutui.ui.node import Node
 from kohakutui.ui.widget import Widget
@@ -67,5 +69,7 @@ __all__ = [
     "Tabs",
     "Text",
     "Tree",
+    "Diff",
+    "Image",
     "Widget",
 ]

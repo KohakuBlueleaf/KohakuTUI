@@ -6,8 +6,15 @@ children) and returns a handle to the created node.
 
 import dataclasses
 from collections.abc import Callable
+import io
+import os
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
+
+try:  # optional: only Image.from_file needs it
+    from PIL import Image as PILImage
+except ImportError:  # pragma: no cover - depends on the environment
+    PILImage = None
 
 
 @dataclass
@@ -202,6 +209,10 @@ class Cell(Component):
     folded header with the count, member names and status counts, opening to the members. The
     title is the noun: ``Cell(batch=3, title="tool calls")`` reads "5 tool calls", an untitled
     group "5 items".
+
+    ``actions=[{"key": "c", "label": "copy", "value": "copy"}]`` lets full-screen navigation
+    (ctrl+↑, or a click on the cell) stop on it; its keys send an ``action`` event with that
+    name and the cell's id as ``focus``.
     """
 
     kind: ClassVar[str] = "cell"
@@ -217,6 +228,7 @@ class Cell(Component):
     tone: str | None = None
     detail: str | None = None
     batch: int | None = None
+    actions: list[dict] | None = None
 
 
 @dataclass
@@ -240,7 +252,23 @@ class Composer(Component):
     """The chat input: history, multi-line editing, a slash-command popup. Emits ``submit``.
 
     ``boxed=True`` draws it inside a rounded border. ``rich_submit=True`` makes ``submit`` carry
-    ``{"text": ..., "now": bool}``, ``now`` set by ctrl+enter.
+    ``{"text": ..., "now": bool}``, ``now`` set by ctrl+enter. ctrl+r searches the history.
+
+    Opt-in, each emitting ``change`` with one key:
+
+    * ``triggers`` (``["@"]``): a word starting with one emits ``{"complete": {"trigger",
+      "query"}}``; answer by updating ``suggestions`` (``[{"label", "value", "detail"}]``).
+      Tab / enter puts the value in place; a value ending in ``/`` keeps completing.
+    * ``fold_paste``: a paste over this many lines shows as ``[Pasted text #n +L lines]``;
+      ``submit`` carries the whole text.
+    * ``modes`` (``[{"prefix": "!", "label": "shell"}]``): text starting with a prefix colours
+      the prompt and names the mode on the box.
+    * ``attachments`` (labels): chips above the text; backspace in an empty input emits
+      ``{"detach": index}`` for the last one.
+    * ``report_draft``: ``{"draft": text}`` whenever the text changes (not for a ``value``
+      set by the app), to keep a draft per conversation.
+    * ctrl+g emits ``{"edit": text}``: open it in an editor (``App.edit_text``) and set
+      ``value`` to the result.
     """
 
     kind: ClassVar[str] = "composer"
@@ -250,6 +278,12 @@ class Composer(Component):
     history: list[str] | None = None
     commands: list[Any] | None = None
     value: str | None = None
+    triggers: list[str] | None = None
+    suggestions: list[Any] | None = None
+    fold_paste: int | None = None
+    report_draft: bool | None = None
+    modes: list[dict] | None = None
+    attachments: list[str] | None = None
 
 
 @dataclass
@@ -470,3 +504,79 @@ class Tree(Component):
     items: list[Any] = field(default_factory=list)
     height: int | None = None
     selected: str | None = None
+
+
+@dataclass
+class Diff(Component):
+    """A file change as coloured lines with line numbers.
+
+    ``text``: a unified diff; or ``old`` and ``new``, compared here with ``context`` unchanged
+    lines around each change (default 3), numbered from ``start`` (a snippet's first line in
+    its file). ``path`` titles it with the +added -removed counts;
+    ``max_lines`` cuts a long diff with a "… N more lines" row.
+    """
+
+    kind: ClassVar[str] = "diff"
+    text: str | None = None
+    old: str | None = None
+    new: str | None = None
+    path: str | None = None
+    context: int | None = None
+    max_lines: int | None = None
+    start: int | None = None
+
+
+@dataclass
+class Image(Component):
+    """A picture in half blocks (two pixels per cell), on any colour terminal.
+
+    ``pixels``: rows of ``"#rrggbb"`` (``""`` transparent); ``Image.from_file`` builds them.
+    Wider than the room it scales down. ``alt`` stands in where there is nothing to draw and is
+    the caption with ``caption=True``.
+    """
+
+    kind: ClassVar[str] = "image"
+    pixels: list[list[str]] | None = None
+    alt: str | None = None
+    caption: bool | None = None
+
+    @classmethod
+    def from_file(
+        cls, source: Any, width: int = 64, alt: str | None = None, caption: bool = False
+    ) -> "Image":
+        """From a picture file (a path, bytes or a file object), ``width`` pixels (= cells)
+        wide at most. Needs Pillow; without it, or for a file it cannot read, the image is
+        just its ``alt``."""
+        name = alt if alt is not None else _source_name(source)
+        try:
+            pixels = _pixels(source, width)
+        except Exception:
+            pixels = None
+        return cls(pixels=pixels, alt=name, caption=caption or None)
+
+
+def _source_name(source: Any) -> str:
+    if isinstance(source, (str, os.PathLike)):
+        return os.path.basename(os.fspath(source))
+    return "image"
+
+
+def _pixels(source: Any, width: int) -> list[list[str]]:
+    if PILImage is None:
+        raise RuntimeError("Image.from_file needs Pillow")
+    if isinstance(source, (bytes, bytearray)):
+        source = io.BytesIO(source)
+    with PILImage.open(source) as img:
+        img = img.convert("RGBA")
+        w, h = img.size
+        if w > width:
+            # cells are about twice as tall as wide, and a cell holds two pixel rows: keep ratio
+            img = img.resize((width, max(1, round(h * width / w))))
+        out = []
+        for y in range(img.size[1]):
+            row = []
+            for x in range(img.size[0]):
+                r, g, b, a = img.getpixel((x, y))
+                row.append("" if a < 128 else f"#{r:02x}{g:02x}{b:02x}")
+            out.append(row)
+        return out

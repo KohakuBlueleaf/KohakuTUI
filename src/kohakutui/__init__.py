@@ -38,6 +38,8 @@ from kohakutui.ui import (
     Tabs,
     Text,
     Tree,
+    Diff,
+    Image,
     Widget,
 )
 
@@ -77,6 +79,8 @@ __all__ = [
     "Tabs",
     "Text",
     "Tree",
+    "Diff",
+    "Image",
     "Widget",
     "reset_terminal",
     "version",
