@@ -1004,3 +1004,145 @@ fn tabs_switch_by_arrow_and_by_a_click_on_their_label() {
         }
     }
 }
+
+fn key(code: KeyCode) -> (KeyCode, KeyModifiers) {
+    (code, KeyModifiers::NONE)
+}
+
+fn ctrl(c: char) -> (KeyCode, KeyModifiers) {
+    (KeyCode::Char(c), KeyModifiers::CONTROL)
+}
+
+#[test]
+fn composer_asks_for_completions_and_puts_the_chosen_one_in_place() {
+    let props = map(vec![("triggers", Value::Array(vec!["@".into()]))]);
+    let mut c = build("composer", &props).unwrap();
+    let out = keys(c.as_mut(), &chars("see @sr"), TYPED);
+    let asks: Vec<_> = out
+        .iter()
+        .filter_map(|e| match e {
+            Emit::Change(v) => Some(format!("{v:?}")),
+            _ => None,
+        })
+        .collect();
+    assert!(asks.last().unwrap().contains("\"sr\""), "{asks:?}");
+    let sug = |label: &str| map(vec![("label", label.into()), ("value", label.into())]);
+    let props = map(vec![("suggestions", Value::Array(vec![sug("src/"), sug("README.md")]))]);
+    c.update(&props).unwrap();
+    assert!(texts(c.as_ref(), 40).iter().any(|l| l.trim() == "src/"));
+    // a folder keeps completing: the word is now @src/ and asked about again
+    let out = keys(c.as_mut(), &[key(KeyCode::Tab)], TYPED);
+    assert!(texts(c.as_ref(), 40)[0].ends_with("see @src/"));
+    assert!(matches!(out.last(), Some(Emit::Change(_))));
+    let props = map(vec![("suggestions", Value::Array(vec![sug("src/main.rs")]))]);
+    c.update(&props).unwrap();
+    keys(c.as_mut(), &[key(KeyCode::Enter)], TYPED);
+    assert_eq!(texts(c.as_ref(), 40)[0], "› see @src/main.rs ");
+}
+
+#[test]
+fn composer_ctrl_r_searches_history_and_esc_restores_the_draft() {
+    let history = Value::Array(vec!["git status".into(), "cargo test".into(), "git log".into()]);
+    let mut c = build("composer", &map(vec![("history", history)])).unwrap();
+    keys(c.as_mut(), &chars("draft"), TYPED);
+    let mut seq = vec![ctrl('r')];
+    seq.extend(chars("git"));
+    keys(c.as_mut(), &seq, TYPED);
+    assert!(texts(c.as_ref(), 60)[0].contains("› git log"));
+    keys(c.as_mut(), &[ctrl('r')], TYPED);
+    assert!(texts(c.as_ref(), 60)[0].contains("› git status"));
+    keys(c.as_mut(), &[key(KeyCode::Esc)], TYPED);
+    assert_eq!(texts(c.as_ref(), 60)[0], "› draft");
+    keys(c.as_mut(), &[ctrl('r'), key(KeyCode::Char('c')), key(KeyCode::Enter)], TYPED);
+    assert_eq!(texts(c.as_ref(), 60)[0], "› cargo test");
+}
+
+#[test]
+fn composer_folds_a_long_paste_and_submits_it_whole() {
+    let mut c = build("composer", &map(vec![("fold_paste", 3.0.into())])).unwrap();
+    let body = "a\nb\nc\nd\ne";
+    let mut out = Vec::new();
+    c.on_input(&Input::Paste(body.into()), &mut out);
+    assert_eq!(texts(c.as_ref(), 60)[0], "› [Pasted text #1 +5 lines]");
+    out.extend(keys(c.as_mut(), &[key(KeyCode::Enter)], TYPED));
+    assert_eq!(out, vec![Emit::Submit(body.into())]);
+    // backspace after the token drops the paste whole
+    c.on_input(&Input::Paste(body.into()), &mut out);
+    keys(c.as_mut(), &[key(KeyCode::Backspace)], TYPED);
+    assert_eq!(texts(c.as_ref(), 60)[0], "› ");
+}
+
+#[test]
+fn composer_modes_chips_detach_and_the_editor_hook() {
+    let modes = Value::Array(vec![map(vec![("prefix", "!".into()), ("label", "shell".into())])]);
+    let props = map(vec![
+        ("boxed", true.into()),
+        ("modes", modes),
+        ("attachments", Value::Array(vec!["a.png".into()])),
+    ]);
+    let mut c = build("composer", &props).unwrap();
+    keys(c.as_mut(), &chars("!ls"), TYPED);
+    let lines = texts(c.as_ref(), 40);
+    assert!(lines[0].contains(" shell "), "{lines:?}");
+    assert!(lines[1].contains("[⎘ a.png]"), "{lines:?}");
+    let out = keys(c.as_mut(), &[ctrl('g')], TYPED);
+    assert!(matches!(&out[..], [Emit::Change(v)] if format!("{v:?}").contains("!ls")));
+    let back = vec![key(KeyCode::Backspace); 4];
+    let out = keys(c.as_mut(), &back, TYPED);
+    assert!(matches!(&out[..], [Emit::Change(v)] if format!("{v:?}").contains("detach")));
+
+    // with report_draft every change of the text is reported; a value set by the app is not
+    c.update(&map(vec![("report_draft", true.into()), ("value", "draft".into())]))
+        .unwrap();
+    let out = keys(c.as_mut(), &chars("!"), TYPED);
+    assert!(
+        matches!(&out[..], [Emit::Change(v)] if format!("{v:?}").contains("draft!")),
+        "{out:?}"
+    );
+    let out = keys(c.as_mut(), &[key(KeyCode::Left)], TYPED);
+    assert!(out.is_empty(), "a move is not a change: {out:?}");
+}
+
+#[test]
+fn diff_compares_old_and_new_into_numbered_hunks() {
+    let old = "a\nb\nc\nd\ne\nf\ng\nh\ni\nj";
+    let new = "a\nb\nc\nd\nE\nf\ng\nh\ni\nj\nk";
+    let props = map(vec![
+        ("old", old.into()),
+        ("new", new.into()),
+        ("path", "x.txt".into()),
+        ("context", 1.0.into()),
+    ]);
+    let c = build("diff", &props).unwrap();
+    let lines = texts(c.as_ref(), 40);
+    assert_eq!(lines[0], "x.txt  +2 -1");
+    assert!(lines.contains(&"@@ -4 +4 @@".to_owned()), "{lines:?}");
+    assert!(lines.iter().any(|l| l.trim_start() == "5 - e"), "{lines:?}");
+    assert!(lines.iter().any(|l| l.trim_start() == "5 + E"), "{lines:?}");
+    assert!(lines.iter().any(|l| l.trim_start() == "11 + k"), "{lines:?}");
+    // unchanged lines far from a change are left out
+    assert!(!lines.iter().any(|l| l.ends_with(" b")), "{lines:?}");
+}
+
+#[test]
+fn diff_reads_a_unified_diff_and_cuts_at_max_lines() {
+    let text = "--- a/f\n+++ b/f\n@@ -10,3 +10,3 @@\n keep\n-old\n+new\n keep2\n";
+    let c = build("diff", &map(vec![("text", text.into()), ("max_lines", 3.0.into())])).unwrap();
+    let lines = texts(c.as_ref(), 40);
+    assert_eq!(lines[0], "@@ -10,3 +10,3 @@");
+    assert_eq!(lines[1].trim_start(), "10   keep");
+    assert_eq!(lines[2].trim_start(), "11 - old");
+    assert_eq!(lines.last().unwrap(), "… 2 more lines");
+}
+
+#[test]
+fn image_draws_two_pixels_per_cell_and_scales_down() {
+    let row = |c: &str| Value::Array(vec![c.into(); 8]);
+    let pixels = Value::Array(vec![row("#ff0000"), row("#0000ff"), row(""), row("#00ff00")]);
+    let c = build("image", &map(vec![("pixels", pixels), ("alt", "pic".into())])).unwrap();
+    assert_eq!(texts(c.as_ref(), 20), vec!["▀▀▀▀▀▀▀▀", "▄▄▄▄▄▄▄▄"]);
+    // half the width: half the rows too
+    assert_eq!(texts(c.as_ref(), 4).len(), 1);
+    let empty = build("image", &map(vec![("alt", "pic".into())])).unwrap();
+    assert_eq!(texts(empty.as_ref(), 20), vec!["[image: pic]"]);
+}

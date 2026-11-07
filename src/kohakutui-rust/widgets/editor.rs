@@ -140,6 +140,19 @@ impl TextEditor {
         self.cursor = start;
     }
 
+    /// Replaces the `n` bytes before the caret with `s` (a completed word, a pasted block).
+    pub fn replace_before(&mut self, n: usize, s: &str) {
+        let start = self.cursor.saturating_sub(n);
+        let s = normalize(s);
+        self.text.replace_range(start..self.cursor, &s);
+        self.cursor = start + s.len();
+    }
+
+    /// The text before the caret.
+    pub fn before(&self) -> &str {
+        &self.text[..self.cursor]
+    }
+
     pub fn kill_to_line_start(&mut self) {
         let start = self.line_start();
         self.text.replace_range(start..self.cursor, "");

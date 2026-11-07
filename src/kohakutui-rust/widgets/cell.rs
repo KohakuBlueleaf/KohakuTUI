@@ -3,6 +3,10 @@
 //! title folds to its header and one summary line until the full-screen view opens it; foldable
 //! headers carry ▸ (folded) or ▾ (open).
 //!
+//! `actions` (`[{key, label, value}]`) make a cell reachable in full-screen navigation (ctrl+↑,
+//! or a click on it): there its keys send an `action` event named by `value`, with the cell
+//! as `focus` (copy, edit, retry on a message), and a hint row lists them.
+//!
 //! A cell with `batch: n` groups its child cells (tool calls, jobs, files): below n children it is invisible
 //! and they render as if they were transcript entries themselves; from n on it folds them under
 //! one "n <title>" header ("n items" untitled), like a web chat's tool batch (see `view::render`).
@@ -60,6 +64,8 @@ pub struct Cell {
     pub detail: Option<String>,
     /// Batch threshold: 0 is a plain cell.
     pub batch: usize,
+    /// Keys that act on the cell in navigation: (key, label, action name).
+    pub actions: Vec<(char, String, String)>,
 }
 
 impl Default for Cell {
@@ -76,6 +82,7 @@ impl Default for Cell {
             tone: None,
             detail: None,
             batch: 0,
+            actions: Vec::new(),
         }
     }
 }
@@ -150,6 +157,19 @@ impl Cell {
         wrap_spans(&spans, width as usize)
     }
 
+    /// The hint for navigation on this cell: "c copy · e edit".
+    pub fn actions_hint(&self) -> Option<String> {
+        if self.actions.is_empty() {
+            return None;
+        }
+        let keys: Vec<String> = self
+            .actions
+            .iter()
+            .map(|(k, l, _)| format!("{k} {l}"))
+            .collect();
+        Some(keys.join(" · "))
+    }
+
     /// The closing line written when the cell seals.
     pub fn trailer_lines(&self, width: u16) -> Vec<Line<'static>> {
         match &self.trailer {
@@ -218,6 +238,22 @@ impl Component for Cell {
         upd_opt_str(p, "tone", &mut self.tone);
         upd_opt_str(p, "detail", &mut self.detail);
         super::props::upd_usize(p, "batch", &mut self.batch, 0);
+        if let Some(v) = get(p, "actions") {
+            self.actions = v
+                .as_array()
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|a| {
+                            let key = crate::proto::value::str_of(a, "key")?.chars().next()?;
+                            let label = crate::proto::value::str_of(a, "label").unwrap_or_default();
+                            let value = crate::proto::value::str_of(a, "value").unwrap_or(label);
+                            Some((key, label.to_owned(), value.to_owned()))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+        }
         Ok(())
     }
 
