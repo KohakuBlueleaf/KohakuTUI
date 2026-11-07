@@ -1048,3 +1048,40 @@ fn a_cell_with_actions_is_navigable_and_its_keys_become_actions() {
     handle_input(&mut m, &mut vs, key(KeyCode::Char('c'), KeyModifiers::NONE), &mut events);
     assert_eq!(events, vec![Event::Action { name: "copy".into(), focus: Some(20) }]);
 }
+
+#[test]
+fn pane_wheel_scrolls_tree_without_moving_worker_status() {
+    let mut m = Model::new();
+    create(
+        &mut m,
+        100,
+        "pane",
+        crate::model::PANELS,
+        map(vec![("side", "right".into()), ("width", 24.into())]),
+    );
+    let items = (0..20)
+        .map(|i| map(vec![("label", format!("run-{i:02}").into())]))
+        .collect();
+    create(
+        &mut m,
+        101,
+        "tree",
+        100,
+        map(vec![("items", Value::Array(items)), ("height", 7.into())]),
+    );
+    create(&mut m, 102, "text", 100, map(vec![("value", "worker ready".into())]));
+    let mut vs = ViewState::new(Mode::Fullscreen);
+    let mut buf = Buffer::empty(Rect::new(0, 0, 60, 8));
+    fullscreen(&m, &mut vs, &mut buf, &ctx());
+    let mut events = Vec::new();
+    for _ in 0..20 {
+        handle_mouse(&mut m, &mut vs, MouseEventKind::ScrollDown, 45, 2, &mut events);
+        fullscreen(&m, &mut vs, &mut buf, &ctx());
+    }
+    let rows: Vec<String> = (0..8)
+        .map(|y| (0..60).map(|x| buf[(x, y)].symbol()).collect())
+        .collect();
+    assert!(rows[6].contains("run-19"), "{rows:?}");
+    assert!(rows[7].contains("worker ready"), "{rows:?}");
+    assert_eq!(vs.pane_scroll.get(&100).copied().unwrap_or(0), 0);
+}

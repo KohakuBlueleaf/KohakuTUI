@@ -456,6 +456,14 @@ pub(crate) fn mouse(
             }
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
                 let up = kind == MouseEventKind::ScrollUp;
+                let act = if up {
+                    MouseAct::ScrollUp
+                } else {
+                    MouseAct::ScrollDown
+                };
+                if click(m, vs, at, act, content_w, events) {
+                    return Some(true);
+                }
                 let top = vs.pane_scroll.entry(hit.id).or_insert(0);
                 *top = if up { top.saturating_sub(3) } else { *top + 3 };
                 true
