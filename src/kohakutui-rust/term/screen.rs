@@ -109,7 +109,8 @@ impl Term {
         term.raw = true;
         mark_active(true);
         if cfg!(unix) {
-            write!(term.out, "\x1b[?2004h")?;
+            // bracketed paste and focus reports
+            write!(term.out, "\x1b[?2004h\x1b[?1004h")?;
         }
 
         // crossterm asks the cursor row through stdout on Unix: only safe when stdout is the tty
@@ -316,6 +317,90 @@ impl Term {
             self.out.flush()?;
         }
         Ok(())
+    }
+
+    /// The window title (OSC 0), on a real terminal only.
+    pub fn title(&mut self, text: &str) -> io::Result<()> {
+        if self.is_tty() {
+            let clean: String = text.chars().filter(|c| !c.is_control()).collect();
+            write!(self.out, "\x1b]0;{clean}\x07")?;
+            self.out.flush()?;
+        }
+        Ok(())
+    }
+
+    /// A desktop notification: OSC 9 (iTerm2, WezTerm, Windows Terminal's toast-less builds
+    /// ignore it) and OSC 777 (kitty, foot, rxvt); terminals without either drop both.
+    pub fn alert(&mut self, title: &str, body: &str) -> io::Result<()> {
+        if self.is_tty() {
+            let clean = |s: &str| -> String {
+                s.chars().filter(|c| !c.is_control() && *c != ';').collect()
+            };
+            let (title, body) = (clean(title), clean(body));
+            write!(self.out, "\x1b]9;{body}\x07\x1b]777;notify;{title};{body}\x07")?;
+            self.out.flush()?;
+        }
+        Ok(())
+    }
+
+    /// Hands the terminal to another program: no mouse, main screen, cooked mode, caret shown.
+    /// Returns whether full screen was on, for `resume`.
+    pub fn suspend(&mut self) -> io::Result<bool> {
+        let was_full = self.fullscreen;
+        if self.is_plain() {
+            return Ok(was_full);
+        }
+        let mouse = self.mouse;
+        self.set_mouse(false)?;
+        self.mouse = mouse;
+        if was_full {
+            write!(self.out, "\x1b[?1049l")?;
+        } else {
+            // the live rows go; the program starts on a clean line where they were
+            queue!(self.out, MoveTo(0, self.vt), Clear(ClearType::FromCursorDown))?;
+        }
+        if cfg!(unix) {
+            write!(self.out, "\x1b[?2004l\x1b[?1004l")?;
+        }
+        queue!(self.out, Show)?;
+        self.out.flush()?;
+        if self.raw {
+            terminal::disable_raw_mode()?;
+        }
+        Ok(was_full)
+    }
+
+    /// Takes the terminal back after `suspend` and forgets the last frame, so all is redrawn.
+    pub fn resume(&mut self, was_full: bool) -> io::Result<()> {
+        if self.is_plain() {
+            return Ok(());
+        }
+        if self.raw {
+            terminal::enable_raw_mode()?;
+        }
+        if cfg!(unix) {
+            write!(self.out, "\x1b[?2004h\x1b[?1004h")?;
+        }
+        if was_full {
+            write!(self.out, "\x1b[?1049h")?;
+            queue!(self.out, MoveTo(0, 0), Clear(ClearType::All))?;
+        } else if self.is_tty() {
+            // the program may have written below the old viewport: start again at the cursor
+            let pos = if cfg!(windows) || io::stdout().is_terminal() {
+                crossterm::cursor::position().ok()
+            } else {
+                None
+            };
+            if let Some((col, row)) = pos {
+                self.anchor(row, col)?;
+            }
+        }
+        if self.mouse {
+            self.mouse = false;
+            self.set_mouse(true)?;
+        }
+        self.prev = None;
+        self.out.flush()
     }
 
     pub fn bell(&mut self) -> io::Result<()> {

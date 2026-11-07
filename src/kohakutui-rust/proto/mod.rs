@@ -84,6 +84,23 @@ pub enum Op {
         ttl_ms: u32,
     },
     Bell,
+    /// Sets the terminal window's title (OSC 0); an empty text gives it back to the shell.
+    Title {
+        text: String,
+    },
+    /// A desktop notification through the terminal (OSC 9 and OSC 777); ignored where unsupported.
+    Alert {
+        title: String,
+        body: String,
+    },
+    /// Gives the terminal back (raw mode, mouse, alternate screen off) for another program, such
+    /// as an editor, and stops drawing and reading keys; `Resume` takes it again and redraws.
+    Suspend,
+    Resume,
+    /// Full screen: scrolls the shown document to its top (true) or its end (false).
+    Scroll {
+        top: bool,
+    },
     /// Puts text on the system clipboard (OSC 52) with a "copied" notice.
     Copy {
         text: String,
@@ -156,6 +173,12 @@ pub enum Event {
     Copy {
         text: String,
     },
+    /// The terminal window gained or lost focus (where the terminal reports it).
+    Focus {
+        gained: bool,
+    },
+    /// The terminal was given back after `Suspend`: another program may use it now.
+    Suspended,
     /// A link clicked in full screen (inline, the terminal handles links itself).
     Link {
         url: String,

@@ -78,6 +78,15 @@ impl Op {
                 ("ttl_ms", (*ttl_ms).into()),
             ]),
             Op::Bell => map(vec![("op", "bell".into())]),
+            Op::Title { text } => map(vec![("op", "title".into()), ("text", text.as_str().into())]),
+            Op::Alert { title, body } => map(vec![
+                ("op", "alert".into()),
+                ("title", title.as_str().into()),
+                ("body", body.as_str().into()),
+            ]),
+            Op::Suspend => map(vec![("op", "suspend".into())]),
+            Op::Resume => map(vec![("op", "resume".into())]),
+            Op::Scroll { top } => map(vec![("op", "scroll".into()), ("top", (*top).into())]),
             Op::Copy { text } => map(vec![("op", "copy".into()), ("text", text.as_str().into())]),
             Op::ShowDoc { id, note, top } => {
                 let mut m = vec![("op", "show_doc".into()), ("id", (*id).into())];
@@ -120,6 +129,10 @@ impl Event {
                 ("rows", (*rows).into()),
                 ("tty", (*tty).into()),
             ]),
+            Event::Focus { gained } => {
+                map(vec![("ev", "focus".into()), ("gained", (*gained).into())])
+            }
+            Event::Suspended => map(vec![("ev", "suspended".into())]),
             Event::Resize { cols, rows } => map(vec![
                 ("ev", "resize".into()),
                 ("cols", (*cols).into()),

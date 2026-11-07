@@ -71,6 +71,8 @@ pub enum InputEv {
         gap: Duration,
     },
     Resize(u16, u16),
+    /// The terminal window gained (true) or lost focus.
+    Focus(bool),
     /// A click or wheel step (full screen only).
     Mouse {
         kind: MouseEventKind,

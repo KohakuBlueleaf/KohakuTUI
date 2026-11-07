@@ -1,9 +1,15 @@
 """Mode, bindings, notices, transcript printing, event subscription, widget ownership and the
 test-backend readers of ``App``."""
 
+import os
 import queue
 import asyncio
-from collections.abc import AsyncIterator, Callable, Iterator
+import shlex
+import subprocess
+import sys
+import tempfile
+from collections.abc import AsyncIterator, Callable, Iterator, Sequence
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from kohakutui.app.events import Event
@@ -58,6 +64,65 @@ class ControlMixin:
 
     def bell(self) -> None:
         self.send([{"op": "bell"}])
+
+    def set_title(self, text: str) -> None:
+        """Sets the terminal window's title (OSC 0); ``""`` hands it back to the shell."""
+        self.send([{"op": "title", "text": text}])
+
+    def alert(self, body: str, title: str = "") -> None:
+        """A desktop notification through the terminal (OSC 9 / OSC 777), where supported.
+
+        Pair it with the ``focus`` event (``gained``) to alert only while the window is away.
+        """
+        self.send([{"op": "alert", "title": title, "body": body}])
+
+    def scroll_to(self, top: bool = True) -> None:
+        """Full screen: scrolls the shown document to its top (or, ``top=False``, its end)."""
+        self.send([{"op": "scroll", "top": top}])
+
+    def suspend(self) -> None:
+        """Gives the terminal to another program until ``resume``: no drawing, no keys read."""
+        self.send([{"op": "suspend"}])
+        self.sync()
+
+    def resume(self) -> None:
+        """Takes the terminal back after ``suspend`` and redraws everything."""
+        self.send([{"op": "resume"}])
+        self.sync()
+
+    def run_external(self, argv: Sequence[str]) -> int:
+        """Runs ``argv`` with the terminal (suspended around it); returns its exit code.
+
+        Blocks; from asyncio run it in a thread (``asyncio.to_thread``).
+        """
+        self.suspend()
+        try:
+            return subprocess.call(list(argv))
+        except OSError:
+            return 127
+        finally:
+            self.resume()
+
+    def edit_text(self, text: str = "", suffix: str = ".md") -> str | None:
+        """Opens ``text`` in ``$VISUAL`` / ``$EDITOR`` (notepad on Windows, vi elsewhere) and
+        returns what was saved; None when the editor could not run or failed.
+
+        Blocks; from asyncio run it in a thread (``asyncio.to_thread``).
+        """
+        editor = os.environ.get("VISUAL") or os.environ.get("EDITOR")
+        if not editor:
+            editor = "notepad" if sys.platform == "win32" else "vi"
+        fd, name = tempfile.mkstemp(suffix=suffix, prefix="kohakutui-")
+        path = Path(name)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
+                f.write(text)
+            argv = shlex.split(editor, posix=sys.platform != "win32") + [str(path)]
+            if self.run_external(argv) != 0:
+                return None
+            return path.read_text(encoding="utf-8")
+        finally:
+            path.unlink(missing_ok=True)
 
     def copy(self, text: str) -> None:
         """Puts ``text`` on the system clipboard (OSC 52, on a real terminal) with a notice."""

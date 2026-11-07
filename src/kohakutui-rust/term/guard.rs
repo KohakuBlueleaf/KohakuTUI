@@ -14,7 +14,7 @@ static HOOK: Once = Once::new();
 /// mouse reports, and reset colors. Resetting the scroll region homes the cursor: position it
 /// afterwards.
 pub(crate) fn restore_bytes() -> &'static [u8] {
-    b"\x1b[?2026l\x1b[r\x1b[?25h\x1b[?2004l\x1b[?1000l\x1b[?1006l\x1b[0m"
+    b"\x1b[?2026l\x1b[r\x1b[?25h\x1b[?2004l\x1b[?1004l\x1b[?1000l\x1b[?1006l\x1b[0m"
 }
 
 /// Leaves the alternate screen; only sent when it is (or may be) active, because it also

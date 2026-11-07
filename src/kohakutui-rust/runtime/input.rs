@@ -13,12 +13,20 @@ use super::InputEv;
 use crate::widgets::Input;
 
 /// Starts reading; the thread stops within one poll interval after `stop` is set.
-pub(crate) fn spawn(stop: Arc<AtomicBool>) -> (Receiver<InputEv>, Option<JoinHandle<()>>) {
+/// While `paused` is set it reads nothing, so another program (an editor) gets the keys.
+pub(crate) fn spawn(
+    stop: Arc<AtomicBool>,
+    paused: Arc<AtomicBool>,
+) -> (Receiver<InputEv>, Option<JoinHandle<()>>) {
     let (tx, rx) = unbounded();
     let handle = thread::Builder::new()
         .name("kohakutui-input".into())
         .spawn(move || {
             while !stop.load(Ordering::SeqCst) {
+                if paused.load(Ordering::SeqCst) {
+                    thread::sleep(Duration::from_millis(30));
+                    continue;
+                }
                 match event::poll(Duration::from_millis(50)) {
                     Ok(true) => {}
                     Ok(false) => continue,
@@ -38,6 +46,8 @@ pub(crate) fn spawn(stop: Arc<AtomicBool>) -> (Receiver<InputEv>, Option<JoinHan
                         })
                     }
                     TermEvent::Paste(s) => InputEv::Input(Input::Paste(s)),
+                    TermEvent::FocusGained => InputEv::Focus(true),
+                    TermEvent::FocusLost => InputEv::Focus(false),
                     TermEvent::Resize(c, r) => InputEv::Resize(c, r),
                     TermEvent::Mouse(me)
                         if matches!(

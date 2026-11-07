@@ -51,6 +51,17 @@ impl Op {
                 },
             },
             "bell" => Op::Bell,
+            "title" => Op::Title { text: req_str(v, "text")?.to_owned() },
+            "alert" => Op::Alert {
+                title: get(v, "title")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned(),
+                body: req_str(v, "body")?.to_owned(),
+            },
+            "suspend" => Op::Suspend,
+            "resume" => Op::Resume,
+            "scroll" => Op::Scroll { top: get(v, "top").and_then(Value::as_bool).unwrap_or(false) },
             "show_doc" => Op::ShowDoc {
                 id: req_id(v, "id")?,
                 note: get(v, "note").and_then(Value::as_str).map(str::to_owned),

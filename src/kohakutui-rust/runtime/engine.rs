@@ -40,13 +40,15 @@ pub(crate) fn run(
     install_panic_hook();
 
     let stop = Arc::new(AtomicBool::new(false));
+    let paused = Arc::new(AtomicBool::new(false));
     let (input_rx, input_thread) = if term.is_tty() {
-        input::spawn(stop.clone())
+        input::spawn(stop.clone(), paused.clone())
     } else {
         (never(), None)
     };
 
     let mut eng = Engine::new(cfg, term, tx.clone());
+    eng.paused = paused;
     let _ = opened.send(Ok(()));
 
     // a panic still restores the terminal (Term's Drop) and still ends with Stopped
@@ -89,6 +91,10 @@ struct Engine {
     virt: Instant,
     /// Inline: lines for scrollback that belong to no node (a document switch's divider).
     notes: Vec<String>,
+    /// Shared with the input thread: set while the terminal is suspended for another program.
+    paused: Arc<AtomicBool>,
+    /// Suspended: Some(whether full screen was on). Nothing is drawn meanwhile.
+    suspended: Option<bool>,
 }
 
 impl Engine {
@@ -102,6 +108,8 @@ impl Engine {
             term,
             model: Model::new(),
             notes: Vec::new(),
+            paused: Arc::new(AtomicBool::new(false)),
+            suspended: None,
             tx,
             epoch: now,
             dirty: true,
@@ -270,6 +278,39 @@ impl Engine {
             Op::Bell => {
                 let _ = self.term.bell();
             }
+            Op::Title { text } => {
+                let _ = self.term.title(&text);
+            }
+            Op::Alert { title, body } => {
+                let _ = self.term.alert(&title, &body);
+            }
+            Op::Scroll { top } => {
+                // the layout clamps this to the top of the document
+                self.vs.scroll = if top { usize::MAX / 2 } else { 0 };
+                self.vs.anchor = None;
+            }
+            Op::Suspend if self.suspended.is_none() => {
+                self.paused.store(true, Ordering::SeqCst);
+                match self.term.suspend() {
+                    Ok(was_full) => self.suspended = Some(was_full),
+                    Err(e) => {
+                        self.paused.store(false, Ordering::SeqCst);
+                        self.report(None, e);
+                        return;
+                    }
+                }
+                self.emit(Event::Suspended);
+            }
+            Op::Suspend => self.emit(Event::Suspended),
+            Op::Resume => {
+                if let Some(was_full) = self.suspended.take() {
+                    if let Err(e) = self.term.resume(was_full) {
+                        self.report(None, e);
+                    }
+                    self.paused.store(false, Ordering::SeqCst);
+                    self.vs.cache.clear();
+                }
+            }
             Op::ShowDoc { id, note, top } => {
                 let before = self.model.doc();
                 let seen = self.vs.doc_scroll.contains_key(&id);
@@ -364,6 +405,10 @@ impl Engine {
                 self.emit(Event::Resize { cols, rows });
                 return;
             }
+            InputEv::Focus(gained) => {
+                self.emit(Event::Focus { gained });
+                return;
+            }
             InputEv::Typed { code, mods, gap } => {
                 self.virt += gap;
                 Input::Key { code, mods, at: self.virt }
@@ -443,6 +488,14 @@ impl Engine {
     }
 
     fn draw(&mut self) {
+        if self.suspended.is_some() {
+            // another program has the terminal: nothing is drawn; `Resume` redraws everything
+            self.dirty = false;
+            for done in self.syncs.drain(..) {
+                let _ = done.send(());
+            }
+            return;
+        }
         // the shown document was removed (the model fell back to the transcript)
         self.vs.switch_doc(&self.model);
         // cleared first: whatever this frame queues for the next one (a copy's toast) stays
@@ -501,6 +554,14 @@ impl Engine {
                 let mut buf = Buffer::empty(self.term.area());
                 let cursor = view::fullscreen(&self.model, &mut self.vs, &mut buf, &ctx);
                 self.vs.link_hits = view::link_hits(&buf);
+                match self.vs.link_hover {
+                    // the link moved away under a still pointer: no highlight left behind
+                    Some(id) if self.vs.link_hits.iter().any(|h| h.3 == id) => {
+                        view::hover_link(&mut buf, &self.vs.link_hits, id);
+                    }
+                    Some(_) => self.vs.link_hover = None,
+                    None => {}
+                }
                 self.term.draw(&buf, cursor)?;
                 if let Some(text) = self.vs.copied.take() {
                     self.copy(text)?;
