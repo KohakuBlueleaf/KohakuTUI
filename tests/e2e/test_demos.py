@@ -34,7 +34,9 @@ def test_train_demo_keeps_scrollback_still_until_the_run_ends():
         "  batch  256",
         "  lr     3e-4 cosine",
     ], "nothing but the start cell is written mid-run"
-    worker.join(timeout=10)
+    # 400 sleeps of 4 ms: a loaded CI runner (macOS) can take well over 10 s for them
+    worker.join(timeout=60)
+    assert not worker.is_alive(), "the run finishes"
 
     history = app.history()
     assert not any("loss is NaN" in line for line in history), "events stay out"
