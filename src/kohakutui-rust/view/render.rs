@@ -11,6 +11,59 @@ use crate::proto::NodeId;
 use crate::text::{clip, display_width, theme, MdLine};
 use crate::widgets::{Cell, Columns, Ctx, Markdown, Role, Stack};
 
+/// Input controls drawn: (first line, lines, node, column).
+pub(crate) type Controls = Vec<(usize, usize, NodeId, u16)>;
+
+thread_local! {
+    /// While collecting (full screen), the input controls drawn: (first line, lines, node,
+    /// column), relative to the lines of the call that is collecting. Callers that place lines
+    /// shift what was pushed while they drew them (`shift_since`).
+    static CONTROLS: std::cell::RefCell<Option<Controls>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Runs `draw` collecting the positions of the input controls it draws.
+pub(crate) fn collect_controls<T>(draw: impl FnOnce() -> T) -> (T, Controls) {
+    let outer = CONTROLS.with(|c| c.replace(Some(Vec::new())));
+    let out = draw();
+    let got = CONTROLS.with(|c| c.replace(outer)).unwrap_or_default();
+    (out, got)
+}
+
+/// How many controls were collected so far (a mark for `shift_since`).
+fn controls_mark() -> usize {
+    CONTROLS.with(|c| c.borrow().as_ref().map_or(0, Vec::len))
+}
+
+/// Moves the controls collected since `mark` down `rows` and right `cols`.
+fn shift_since(mark: usize, rows: usize, cols: u16) {
+    CONTROLS.with(|c| {
+        if let Some(list) = c.borrow_mut().as_mut() {
+            for entry in list.iter_mut().skip(mark) {
+                entry.0 += rows;
+                entry.3 += cols;
+            }
+        }
+    });
+}
+
+/// Drops the controls collected since `mark` (drawn where positions are not tracked).
+fn drop_since(mark: usize) {
+    CONTROLS.with(|c| {
+        if let Some(list) = c.borrow_mut().as_mut() {
+            list.truncate(mark);
+        }
+    });
+}
+
+fn push_control(lines: usize, id: NodeId) {
+    CONTROLS.with(|c| {
+        if let Some(list) = c.borrow_mut().as_mut() {
+            list.push((0, lines, id, 0));
+        }
+    });
+}
+
 /// A cell's lines, split for incremental flushing.
 #[derive(Default)]
 pub(crate) struct CellParts {
@@ -64,6 +117,9 @@ pub(crate) fn node_lines(
         *cursor = node.comp.cursor(width);
     }
     if !node.comp.container() {
+        if node.comp.focusable() && !node.sealed {
+            push_control(out.len(), id);
+        }
         return out;
     }
 
@@ -73,13 +129,16 @@ pub(crate) fn node_lines(
         .children
         .iter()
         .enumerate()
-        .filter(|(i, _)| node.comp.shows_child(*i))
+        .filter(|(i, c)| node.comp.shows_child(*i) && !m.node(**c).is_some_and(|n| n.hidden))
         .map(|(_, c)| *c)
         .collect();
     if let Some((per_row, col_gap)) = node.comp.side_by_side() {
         let min = m.comp_as::<Columns>(id).map_or(16, |c| c.min_width);
+        // columns are not tracked: their controls take keys, not clicks
+        let mark = controls_mark();
         if m.comp_as::<Columns>(id).is_some_and(|c| c.pack) {
             out.extend(packed(m, &shown, col_gap, width, &ctx.focused(false), target));
+            drop_since(mark);
             return out;
         }
         out.extend(side_by_side(
@@ -92,9 +151,11 @@ pub(crate) fn node_lines(
             &ctx.focused(false),
             target,
         ));
+        drop_since(mark);
         return out;
     }
     let mut children = Vec::new();
+    let window_mark = controls_mark();
     for (i, child) in shown.iter().enumerate() {
         if i > 0 {
             children.extend((0..gap).map(|_| Line::default()));
@@ -102,13 +163,19 @@ pub(crate) fn node_lines(
         let base = header + children.len() as u16;
         let mut child_cursor = None;
         let child_ctx = ctx.focused(false);
+        let mark = controls_mark();
         children.extend(node_lines(m, *child, width, &child_ctx, target, &mut child_cursor));
+        shift_since(mark, base as usize, 0);
         if let Some((r, c)) = child_cursor {
             *cursor = Some((base + r, c));
         }
     }
     // the caret moves with the window, and is hidden when its line was cut off
     let (start, end) = node.comp.window(children.len());
+    if (start, end) != (0, children.len()) {
+        // a scrolled window: its controls are reached by keys
+        drop_since(window_mark);
+    }
     if let Some((r, c)) = *cursor {
         if let Some(r) = usize::from(r).checked_sub(usize::from(header)) {
             *cursor = (start..end)
@@ -266,7 +333,9 @@ pub(crate) fn cell_parts(m: &Model, id: NodeId, width: u16, ctx: &Ctx) -> CellPa
     let mut scrolls = Vec::new();
     for child in node.children.iter().filter(|c| Some(**c) != body_id) {
         let base = prefix.len();
+        let mark = controls_mark();
         let (lines, h, sc) = child_lines(m, *child, inner, ctx);
+        shift_since(mark, base, indent as u16);
         heads.extend(h.into_iter().map(|(i, n)| (base + i, n)));
         scrolls.extend(sc.into_iter().map(|(i, len, n)| (base + i, len, n)));
         prefix.extend(indented(lines, indent, cell.body_style()));
@@ -328,6 +397,11 @@ pub(crate) fn cell_parts(m: &Model, id: NodeId, width: u16, ctx: &Ctx) -> CellPa
 }
 
 /// Whether a node folds: a collapsed titled cell, or a batch at its threshold.
+/// Whether navigation stops on the cell: it folds, or it has actions.
+pub(crate) fn navigable(m: &Model, id: NodeId) -> bool {
+    foldable(m, id) || m.comp_as::<Cell>(id).is_some_and(|c| !c.actions.is_empty())
+}
+
 pub(crate) fn foldable(m: &Model, id: NodeId) -> bool {
     match m.comp_as::<Cell>(id) {
         Some(c) if c.batch > 0 => m.children(id).len() >= c.batch,
@@ -344,7 +418,7 @@ fn child_lines(m: &Model, child: NodeId, width: u16, ctx: &Ctx) -> ChildLines {
         let mut parts = cell_parts(m, child, width, ctx);
         let mut heads = std::mem::take(&mut parts.heads);
         let scrolls = std::mem::take(&mut parts.scrolls);
-        if foldable(m, child) {
+        if navigable(m, child) {
             heads.insert(0, (0, child));
         }
         return (parts.all(), heads, scrolls);
@@ -383,7 +457,9 @@ fn batch_parts(m: &Model, id: NodeId, cell: &Cell, width: u16, ctx: &Ctx) -> Cel
             parts.prefix.push(Line::default());
         }
         let base = parts.prefix.len();
+        let mark = controls_mark();
         let (lines, h, sc) = child_lines(m, *kid, inner, ctx);
+        shift_since(mark, base, indent as u16);
         parts
             .heads
             .extend(h.into_iter().map(|(i, n)| (base + i, n)));

@@ -402,6 +402,11 @@ pub fn focus_area() -> Style {
 }
 
 /// Only the selection's background, for a whole row whose text keeps its own colours.
+/// A link under the pointer: the selection colours, bold, still underlined.
+pub fn link_hover() -> Style {
+    selection().add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+}
+
 pub fn selection_bg() -> Style {
     match current().color("selection_bg") {
         Some(c) => Style::default().bg(c),

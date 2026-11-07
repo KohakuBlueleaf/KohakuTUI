@@ -12,7 +12,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Clear, Widget};
 
 use super::panes;
-use super::render::{cell_parts, foldable, node_lines, separator};
+use super::render::{cell_parts, collect_controls, navigable, node_lines, separator};
 use super::ViewState;
 use super::{Anchor, Mode};
 use crate::model::{FlushState, Model, BOTTOM, HEAD, LIVE, OVERLAYS, PANELS};
@@ -274,6 +274,8 @@ struct Transcript {
     /// Top-level nodes that are not cells and take input (a page's tree): (first line after
     /// the separator, lines, node).
     plain: Vec<(usize, usize, NodeId)>,
+    /// Input controls inside open cells: (first line, lines, node, column).
+    controls: Vec<(usize, usize, NodeId, u16)>,
 }
 
 fn transcript_all(m: &Model, vs: &mut ViewState, width: u16, ctx: &Ctx) -> Transcript {
@@ -284,6 +286,7 @@ fn transcript_all(m: &Model, vs: &mut ViewState, width: u16, ctx: &Ctx) -> Trans
     let mut prompts = Vec::new();
     let mut bases = Vec::new();
     let mut plain = Vec::new();
+    let mut controls = Vec::new();
     for &id in m.children(m.doc()) {
         bases.push((id, out.len()));
         out.extend(separator(m, id));
@@ -301,10 +304,16 @@ fn transcript_all(m: &Model, vs: &mut ViewState, width: u16, ctx: &Ctx) -> Trans
             Some(c) => (c.3.clone(), c.4.clone(), c.5.clone()),
             None => {
                 let rendered = if m.comp_as::<Cell>(id).is_some() {
-                    let mut parts = cell_parts(m, id, width, &ctx);
+                    // an open cell's controls (a form in a reply) take clicks where drawn
+                    let (mut parts, found) = collect_controls(|| cell_parts(m, id, width, &ctx));
+                    controls.extend(
+                        found
+                            .into_iter()
+                            .map(|(i, len, n, x)| (out.len() + i, len, n, x)),
+                    );
                     let mut h = std::mem::take(&mut parts.heads);
                     let sc = std::mem::take(&mut parts.scrolls);
-                    if foldable(m, id) {
+                    if navigable(m, id) {
                         h.insert(0, (0, id));
                     }
                     (parts.all(), h, sc)
@@ -330,7 +339,7 @@ fn transcript_all(m: &Model, vs: &mut ViewState, width: u16, ctx: &Ctx) -> Trans
         out.extend(lines);
     }
     vs.cache.retain(|id, _| m.contains(*id));
-    Transcript { lines: out, heads, scrolls, prompts, bases, plain }
+    Transcript { lines: out, heads, scrolls, prompts, bases, plain, controls }
 }
 
 fn draw_lines(buf: &mut Buffer, area: Rect, lines: &[Line<'static>]) {
@@ -352,6 +361,7 @@ pub fn fullscreen(
     let target = input_target(m, vs);
     let width = area.width;
     vs.screen_width = width;
+    vs.find_caret = None;
 
     // the head row (a tab strip of pages) across the top, over everything else
     let (head, head_rows) = panes::stacked(m, HEAD, width, ctx, target);
@@ -422,7 +432,7 @@ pub fn fullscreen(
     let below = column.y + main_h;
 
     let t = transcript_all(m, vs, main.width, ctx);
-    let Transcript { lines, heads, scrolls, prompts, bases, plain } = t;
+    let Transcript { lines, heads, scrolls, prompts, bases, plain, controls } = t;
     let total = lines.len();
     let h = main_h as usize;
     // follow: scrolled up, the line at the top of the view stays there whatever changes below
@@ -454,14 +464,39 @@ pub fn fullscreen(
             .scroll
             .clamp(lowest, (total - i).saturating_sub(1).max(lowest));
     }
+    // find: the matching lines (counted from the bottom); a jump brings the current one into
+    // the middle of the view
+    let found = find_lines(vs, &lines);
+    if let Some(find) = vs.find.as_mut() {
+        find.total = found.len();
+        find.current = find.current.min(found.len().saturating_sub(1));
+        if find.jump {
+            find.jump = false;
+            if let Some(&line) = found.get(found.len().saturating_sub(1 + find.current)) {
+                vs.scroll = total.saturating_sub(line + 1 + h / 2);
+                vs.nav = None;
+            }
+        }
+    }
     let max_scroll = total.saturating_sub(h);
     vs.scroll = vs.scroll.min(max_scroll);
     let end = total - vs.scroll;
     let start = end.saturating_sub(h);
     draw_lines(buf, main, &lines[start..end]);
+    if let Some(find) = vs.find.clone() {
+        let current = found
+            .get(found.len().saturating_sub(1 + find.current))
+            .copied();
+        mark_found(buf, main, &lines, start, end, &find.query, current);
+    }
     vs.main_area = main;
     // top-level nodes that are not cells (a page's tree or table) take clicks
     vs.doc_rows = panes::visible_rows(&plain, start, end - start, main.y);
+    vs.control_rows = controls
+        .into_iter()
+        .filter(|(i, len, _, _)| *i >= start && i + len <= end)
+        .map(|(i, len, id, x)| (main.y + (i - start) as u16, len as u16, id, main.x + x))
+        .collect();
     if vs.scroll > 0 {
         // the node holding the top line, and how far into it, for the next frame
         if let Some(&(node, base)) = bases.iter().rev().find(|(_, b)| *b <= start) {
@@ -511,7 +546,47 @@ pub fn fullscreen(
                 .collect();
         }
     }
-    if vs.scroll > 0 && main_h > 0 {
+    if let Some(find) = vs.find.as_ref().filter(|_| main_h > 0) {
+        // the find bar takes the bottom row of the transcript, over the "↓ more" note
+        let y = main.y + main_h - 1;
+        let count = match find.total {
+            0 if find.query.is_empty() => String::new(),
+            0 => "  no match".to_owned(),
+            n => format!("  {}/{n}", n - find.current),
+        };
+        let hint = "  ↑ older · ↓ newer · esc";
+        let head = format!(" find: {}", find.query);
+        for x in main.x..main.x + main.width {
+            if let Some(cell) = buf.cell_mut((x, y)) {
+                cell.reset();
+            }
+        }
+        let line = Line::from(vec![
+            Span::styled(head.clone(), theme::selection()),
+            Span::styled(count, theme::accent()),
+            Span::styled(hint, theme::muted()),
+        ]);
+        buf.set_line(main.x, y, &line, main.width);
+        vs.find_caret = Some((main.x + display_width(&head) as u16, y));
+    } else if let Some(hint) = vs
+        .nav
+        .and_then(|n| m.comp_as::<Cell>(n))
+        .and_then(Cell::actions_hint)
+        .filter(|_| main_h > 0)
+    {
+        // a navigated message: its keys on the bottom row
+        let y = main.y + main_h - 1;
+        for x in main.x..main.x + main.width {
+            if let Some(cell) = buf.cell_mut((x, y)) {
+                cell.reset();
+            }
+        }
+        let line = Line::from(vec![
+            Span::styled(format!(" {hint} "), theme::selection()),
+            Span::styled("  ↑↓ move · esc", theme::muted()),
+        ]);
+        buf.set_line(main.x, y, &line, main.width);
+    } else if vs.scroll > 0 && main_h > 0 {
         let text = if vs.unseen > 0 {
             format!(" ↓ {} new · ctrl+end ", vs.unseen)
         } else {
@@ -582,7 +657,72 @@ pub fn fullscreen(
         }
     }
     select(vs, buf, area);
+    // keys go to the find bar while it is open (unless a dialog has them)
+    if vs.find.is_some() && m.top_overlay().is_none() {
+        cursor = vs.find_caret;
+    }
     cursor.filter(|(x, y)| *x < area.right() && *y < area.bottom())
+}
+
+/// Lines of the transcript containing the find query (case-insensitive), top to bottom.
+fn find_lines(vs: &ViewState, lines: &[Line<'static>]) -> Vec<usize> {
+    let Some(query) = vs.find.as_ref().map(|f| f.query.to_lowercase()) else {
+        return Vec::new();
+    };
+    if query.is_empty() {
+        return Vec::new();
+    }
+    lines
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| crate::text::plain(l).to_lowercase().contains(&query))
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// Highlights every match of `query` in the drawn lines; the current line's matches stronger.
+fn mark_found(
+    buf: &mut Buffer,
+    main: Rect,
+    lines: &[Line<'static>],
+    start: usize,
+    end: usize,
+    query: &str,
+    current: Option<usize>,
+) {
+    if query.is_empty() {
+        return;
+    }
+    let q: Vec<char> = query.to_lowercase().chars().collect();
+    for (i, line) in lines.iter().enumerate().take(end).skip(start) {
+        let text: Vec<char> = crate::text::plain(line).chars().collect();
+        let lower: Vec<char> = text.iter().flat_map(|c| c.to_lowercase()).collect();
+        if lower.len() != text.len() {
+            continue; // a character whose lower case is longer: columns would not line up
+        }
+        let y = main.y + (i - start) as u16;
+        let style = if current == Some(i) {
+            theme::selection()
+        } else {
+            theme::user_band()
+        };
+        let mut at = 0;
+        while at + q.len() <= lower.len() {
+            if lower[at..at + q.len()] == q[..] {
+                let col: String = text[..at].iter().collect();
+                let hit: String = text[at..at + q.len()].iter().collect();
+                let x = main.x + display_width(&col) as u16;
+                let w = display_width(&hit) as u16;
+                if x < main.right() {
+                    let w = w.min(main.right() - x);
+                    buf.set_style(Rect::new(x, y, w, 1), style);
+                }
+                at += q.len();
+            } else {
+                at += 1;
+            }
+        }
+    }
 }
 
 /// The drag selection: its text is taken once, on release, from what this frame drew; then it
@@ -591,12 +731,17 @@ fn select(vs: &mut ViewState, buf: &mut Buffer, area: Rect) {
     let Some(mut sel) = vs.selection else {
         return;
     };
+    // only what lies inside the selection's own area (and the screen)
+    let area = sel.bounds.intersection(area);
+    if area.is_empty() {
+        return;
+    }
     let ((c0, r0), (c1, r1)) = sel.ordered();
     let r1 = r1.min(area.bottom().saturating_sub(1));
     if sel.done && !sel.copied {
         let mut rows = Vec::new();
-        for y in r0..=r1 {
-            let from = if y == r0 { c0 } else { area.x };
+        for y in r0.max(area.y)..=r1 {
+            let from = if y == r0 { c0.max(area.x) } else { area.x };
             let to = if y == r1 {
                 c1
             } else {
@@ -614,7 +759,7 @@ fn select(vs: &mut ViewState, buf: &mut Buffer, area: Rect) {
         sel.copied = true;
         vs.selection = Some(sel);
     }
-    for y in r0..=r1 {
+    for y in r0.max(area.y)..=r1 {
         for x in area.x..area.right() {
             if sel.contains(x, y) {
                 let cell = &mut buf[(x, y)];
@@ -660,6 +805,15 @@ fn modal(
         .filter(|(r, _)| *r < inner.height)
         .map(|(r, c)| (inner.x + c, inner.y + r));
     (cursor, inner)
+}
+
+/// Highlights the cells of link `id` (the one under the pointer), as a browser does on hover.
+pub fn hover_link(buf: &mut Buffer, hits: &[(u16, u16, u16, u32)], id: u32) {
+    for &(y, x0, x1, link) in hits {
+        if link == id {
+            buf.set_style(Rect::new(x0, y, x1 - x0, 1), theme::link_hover());
+        }
+    }
 }
 
 /// Runs of linked cells in a drawn frame, as (row, first col, end col, link id), so a click in

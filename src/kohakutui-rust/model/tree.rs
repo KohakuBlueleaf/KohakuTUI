@@ -25,6 +25,7 @@ impl Model {
                     children: Vec::new(),
                     comp: Box::<Stack>::default(),
                     sealed: false,
+                    hidden: false,
                     version: 0,
                 },
             );
@@ -136,10 +137,14 @@ impl Model {
         }
     }
 
-    /// Whether `id` sits in a pane its container does not draw (a tab that is not open).
+    /// Whether `id` is not drawn: it or an ancestor is `hidden`, or it sits in a pane its
+    /// container does not draw (a tab that is not open).
     pub fn hidden(&self, id: NodeId) -> bool {
         let mut cur = id;
         while let Some(n) = self.nodes.get(&cur) {
+            if n.hidden {
+                return true;
+            }
             let Some(parent) = self.nodes.get(&n.parent) else {
                 return false;
             };

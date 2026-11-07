@@ -169,6 +169,92 @@ fn ctrl_o_is_a_round_trip_and_a_drag_in_full_screen_copies_what_it_covers() {
     assert!(s.sync(WAIT), "the toast's frame");
     let screen = s.screen().unwrap().screen();
     assert!(screen.iter().any(|l| l.contains("copied 7 characters")), "{screen:#?}");
+
+    // with a pane beside the transcript, a drag from the text off to the right and down stays
+    // in the transcript: no divider, no pane text
+    let pane = map(vec![
+        ("side", "right".into()),
+        ("width", 7.into()),
+        ("min", 6.into()),
+    ]);
+    s.apply(vec![
+        create(60, "pane", 4, pane),
+        create(61, "text", 60, map(vec![("value", "notes".into())])),
+    ])
+    .unwrap();
+    assert!(s.sync(WAIT));
+    events(&s);
+    let screen = s.screen().unwrap().screen();
+    let row = screen.iter().position(|l| l.contains("copy me")).unwrap() as u16;
+    assert!(screen.iter().any(|l| l.contains("notes")), "{screen:#?}");
+    let line = &screen[row as usize];
+    let col = line[..line.find("copy").unwrap()].chars().count() as u16;
+    let at = |kind, col, row| InputEv::Mouse { kind, col, row };
+    s.inject(vec![
+        at(MouseEventKind::Down(MouseButton::Left), col, row),
+        at(MouseEventKind::Drag(MouseButton::Left), 39, row + 1),
+        at(MouseEventKind::Up(MouseButton::Left), 39, row + 1),
+    ])
+    .unwrap();
+    assert!(s.sync(WAIT));
+    let copied = events(&s);
+    let Some(Event::Copy { text }) = copied.first() else {
+        panic!("a copy: {copied:?}");
+    };
+    assert!(text.starts_with("copy me please"), "{text:?}");
+    assert!(!text.contains('│') && !text.contains("notes"), "only the transcript: {text:?}");
+
+    // and the pane's own text is selected the same way, without the transcript beside it
+    let screen = s.screen().unwrap().screen();
+    let (row, line) = screen
+        .iter()
+        .enumerate()
+        .find(|(_, l)| l.contains("notes"))
+        .unwrap();
+    let col = line[..line.find("notes").unwrap()].chars().count() as u16;
+    let row = row as u16;
+    s.inject(vec![
+        at(MouseEventKind::Down(MouseButton::Left), col, row),
+        at(MouseEventKind::Drag(MouseButton::Left), 39, row),
+        at(MouseEventKind::Up(MouseButton::Left), 39, row),
+    ])
+    .unwrap();
+    assert!(s.sync(WAIT));
+    let copied = events(&s);
+    assert!(
+        copied
+            .iter()
+            .any(|e| matches!(e, Event::Copy { text } if text == "notes")),
+        "the pane's word, its edge not included: {copied:?}"
+    );
+
+    // and a boxed input's text without its border
+    let composer = map(vec![("boxed", true.into()), ("value", "draft".into())]);
+    s.apply(vec![create(70, "composer", 3, composer)]).unwrap();
+    assert!(s.sync(WAIT));
+    events(&s);
+    let screen = s.screen().unwrap().screen();
+    let (row, line) = screen
+        .iter()
+        .enumerate()
+        .find(|(_, l)| l.contains("draft"))
+        .unwrap();
+    let row = row as u16;
+    let col = line[..line.find("draft").unwrap()].chars().count() as u16;
+    s.inject(vec![
+        at(MouseEventKind::Down(MouseButton::Left), col, row),
+        at(MouseEventKind::Drag(MouseButton::Left), 39, row),
+        at(MouseEventKind::Up(MouseButton::Left), 39, row),
+    ])
+    .unwrap();
+    assert!(s.sync(WAIT));
+    let copied = events(&s);
+    assert!(
+        copied
+            .iter()
+            .any(|e| matches!(e, Event::Copy { text } if text == "draft")),
+        "inside the box only: {copied:?} {screen:#?}"
+    );
 }
 
 #[test]

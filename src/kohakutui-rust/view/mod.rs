@@ -21,7 +21,7 @@ use crate::proto::{Level, Mode, NodeId};
 pub use chord::Chord;
 pub use flush::{flush_all, take_flushable};
 pub use input::{handle_input, handle_mouse, Outcome};
-pub use layout::{fullscreen, inline, input_target, link_hits, Screen};
+pub use layout::{fullscreen, hover_link, inline, input_target, link_hits, Screen};
 
 /// A transient notice shown above the bottom region.
 #[derive(Debug, Clone)]
@@ -111,6 +111,8 @@ pub struct ViewState {
     /// nodes that are not cells (pages: trees, tables), which take clicks like pane content.
     pub(crate) main_area: ratatui::layout::Rect,
     pub(crate) doc_rows: Vec<(u16, u16, NodeId, u16)>,
+    /// Input controls inside open transcript cells as drawn: (row, rows, node, first column).
+    pub(crate) control_rows: Vec<(u16, u16, NodeId, u16)>,
     /// The document drawn on the last frame: a change (shown, or the shown one removed) resets
     /// the per-document view state.
     pub(crate) shown: NodeId,
@@ -124,6 +126,8 @@ pub struct ViewState {
     pub(crate) heads: Vec<NodeId>,
     /// The header under the mouse pointer (full screen).
     pub(crate) hover: Option<NodeId>,
+    /// The link under the pointer (full screen), drawn highlighted.
+    pub(crate) link_hover: Option<u32>,
     /// The header focused in transcript navigation (ctrl+↑ in full screen); keys go to it.
     pub(crate) nav: Option<NodeId>,
     /// Full-screen text selection: drag to select, copied on release.
@@ -132,6 +136,22 @@ pub struct ViewState {
     pub(crate) copied: Option<String>,
     /// Rendered sealed cells for the full-screen transcript.
     pub(crate) cache: HashMap<NodeId, CachedCell>,
+    /// Full screen: find in the shown document (ctrl+f).
+    pub(crate) find: Option<Find>,
+    /// Where the find bar's caret was drawn on the last frame.
+    pub(crate) find_caret: Option<(u16, u16)>,
+}
+
+/// Find in the transcript: the query, whether keys go to it, and the match being shown,
+/// counted from the bottom (0 = the newest), moved to on the next frame when `jump` is set.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Find {
+    pub query: String,
+    pub editing: bool,
+    pub current: usize,
+    pub jump: bool,
+    /// Matches on the last frame (shown as `current + 1 / total`).
+    pub total: usize,
 }
 
 /// A drag selection on the full-screen frame, in screen cells.
@@ -142,9 +162,26 @@ pub(crate) struct Selection {
     /// The button was released: the text is copied once, the highlight stays until next press.
     pub done: bool,
     pub copied: bool,
+    /// The area the press was in (the transcript, a pane, the input, a dialog): the selection
+    /// stays inside it, so borders and neighbouring columns are never part of it.
+    pub bounds: ratatui::layout::Rect,
 }
 
 impl Selection {
+    /// A selection starting at the press `(col, row)`, kept inside `bounds`.
+    pub fn new(at: (u16, u16), bounds: ratatui::layout::Rect) -> Self {
+        Selection { anchor: at, head: at, done: false, copied: false, bounds }
+    }
+
+    /// A point moved inside the bounds (a drag past the edge selects up to it).
+    pub fn clamp(&self, (col, row): (u16, u16)) -> (u16, u16) {
+        let b = self.bounds;
+        (
+            col.clamp(b.x, b.right().saturating_sub(1).max(b.x)),
+            row.clamp(b.y, b.bottom().saturating_sub(1).max(b.y)),
+        )
+    }
+
     /// Start and end (col, row), in reading order.
     pub fn ordered(&self) -> ((u16, u16), (u16, u16)) {
         let key = |p: (u16, u16)| (p.1, p.0);
@@ -156,6 +193,10 @@ impl Selection {
     }
 
     pub fn contains(&self, col: u16, row: u16) -> bool {
+        let b = self.bounds;
+        if col < b.x || col >= b.right() || row < b.y || row >= b.bottom() {
+            return false;
+        }
         let ((c0, r0), (c1, r1)) = self.ordered();
         if row < r0 || row > r1 {
             return false;
@@ -201,16 +242,20 @@ impl ViewState {
             bottom_area: ratatui::layout::Rect::default(),
             main_area: ratatui::layout::Rect::default(),
             doc_rows: Vec::new(),
+            control_rows: Vec::new(),
             shown: crate::model::TRANSCRIPT,
             anchor: None,
             unseen: 0,
             screen_width: 80,
             heads: Vec::new(),
             hover: None,
+            link_hover: None,
             nav: None,
             selection: None,
             copied: None,
             cache: HashMap::new(),
+            find: None,
+            find_caret: None,
         }
     }
 

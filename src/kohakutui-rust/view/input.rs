@@ -5,6 +5,7 @@
 //! Mouse events exist only in full screen: the wheel scrolls, a click opens a folded cell.
 
 use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEventKind};
+use ratatui::layout::Rect;
 
 use super::layout::{input_target, page_input};
 use super::{Selection, ViewState};
@@ -39,8 +40,20 @@ pub fn handle_input(
         if code == KeyCode::Char('c') && mods.contains(KeyModifiers::CONTROL) {
             return Outcome::Interrupt;
         }
+        if vs.find.is_some() && vs.mode == Mode::Fullscreen && top.is_none() {
+            if let Some(outcome) = find_key(vs, code, mods) {
+                return outcome;
+            }
+        }
         if let Some((_, action)) = vs.bindings.iter().find(|(c, _)| c.matches(code, mods)) {
             events.push(Event::Action { name: action.clone(), focus: target });
+            return Outcome::Redraw;
+        }
+        if code == KeyCode::Char('f')
+            && mods == KeyModifiers::CONTROL
+            && vs.mode == Mode::Fullscreen
+        {
+            vs.find = Some(super::Find { editing: true, ..Default::default() });
             return Outcome::Redraw;
         }
         if code == KeyCode::Char('t') && mods == KeyModifiers::CONTROL {
@@ -49,7 +62,7 @@ pub fn handle_input(
         if code == KeyCode::Char('o') && mods == KeyModifiers::CONTROL {
             return Outcome::ExpandAll;
         }
-        if let Some(outcome) = navigate(m, vs, code, mods) {
+        if let Some(outcome) = navigate(m, vs, code, mods, events) {
             return outcome;
         }
         // ctrl+end / ctrl+home jump the full-screen transcript even while an input has focus
@@ -232,10 +245,16 @@ pub fn handle_mouse(
         // the pointer tints the header it is over; redraw only when that changes
         MouseEventKind::Moved => {
             let hover = header_at(vs);
-            if hover == vs.hover {
+            let link = vs
+                .link_hits
+                .iter()
+                .find(|(y, x0, x1, _)| *y == row && (*x0..*x1).contains(&col))
+                .map(|h| h.3);
+            if hover == vs.hover && link == vs.link_hover {
                 return false;
             }
             vs.hover = hover;
+            vs.link_hover = link;
         }
         MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
             let up = kind == MouseEventKind::ScrollUp;
@@ -272,14 +291,11 @@ pub fn handle_mouse(
         MouseEventKind::Down(MouseButton::Left) => {
             // only a visible selection needs a redraw when the press clears it
             let had = vs.selection.take().is_some_and(|s| s.anchor != s.head);
-            vs.selection = Some(Selection {
-                anchor: (col, row),
-                head: (col, row),
-                done: false,
-                copied: false,
-            });
+            vs.selection = Some(Selection::new((col, row), selection_bounds(m, vs, col, row)));
             match header_at(vs) {
-                Some(id) => m.toggle_open(id),
+                // a header folds; a message with actions is picked for its keys
+                Some(id) if super::render::foldable(m, id) => m.toggle_open(id),
+                Some(id) => vs.nav = Some(id),
                 None => return had,
             }
         }
@@ -287,10 +303,11 @@ pub fn handle_mouse(
             let Some(sel) = vs.selection.as_mut().filter(|s| !s.done) else {
                 return false;
             };
-            if sel.head == (col, row) {
+            let head = sel.clamp((col, row));
+            if sel.head == head {
                 return false;
             }
-            sel.head = (col, row);
+            sel.head = head;
         }
         MouseEventKind::Up(MouseButton::Left) => {
             let Some(sel) = vs.selection.as_mut() else {
@@ -308,7 +325,7 @@ pub fn handle_mouse(
                 }
                 return false;
             }
-            sel.head = (col, row);
+            sel.head = sel.clamp((col, row));
             sel.done = true;
         }
         _ => return false,
@@ -324,6 +341,7 @@ fn navigate(
     vs: &mut ViewState,
     code: KeyCode,
     mods: KeyModifiers,
+    events: &mut Vec<Event>,
 ) -> Option<Outcome> {
     if vs.mode != Mode::Fullscreen || m.top_overlay().is_some() {
         vs.nav = None;
@@ -331,6 +349,17 @@ fn navigate(
     }
     let ctrl = mods.contains(KeyModifiers::CONTROL);
     let at = vs.nav.and_then(|n| vs.heads.iter().position(|h| *h == n));
+    // a navigated cell's own keys first (copy, edit, retry)
+    if let (Some(id), KeyCode::Char(c)) = (vs.nav, code) {
+        let action = m
+            .comp_as::<crate::widgets::Cell>(id)
+            .and_then(|cell| cell.actions.iter().find(|(k, _, _)| *k == c))
+            .map(|(_, _, value)| value.clone());
+        if let Some(name) = action.filter(|_| !ctrl) {
+            events.push(Event::Action { name, focus: Some(id) });
+            return Some(Outcome::Redraw);
+        }
+    }
     match (vs.nav, code) {
         (None, KeyCode::Up) if ctrl => vs.nav = vs.heads.last().copied(),
         (None, _) => return None,
@@ -444,6 +473,44 @@ fn builtin(m: &Model, vs: &mut ViewState, code: KeyCode) -> Outcome {
 /// Every open focusable node in layout order: controls in the shown document's open cells
 /// (forms in a reply that is still live), the live region, then, in full screen, the head
 /// row and the panes, and the bottom region.
+/// The area a selection pressed at `(col, row)` stays in: the open dialog, a pane's content (its
+/// divider left out), the input region, or the transcript; the whole screen otherwise.
+pub(crate) fn selection_bounds(m: &Model, vs: &ViewState, col: u16, row: u16) -> Rect {
+    let inside = |r: Rect| col >= r.x && col < r.right() && row >= r.y && row < r.bottom();
+    if let Some((_, top, x, w, h)) = vs.overlay_hit {
+        let r = Rect::new(x, top.max(0) as u16, w, h);
+        if inside(r) {
+            return r;
+        }
+    }
+    for hit in vs.pane_hits.iter().filter(|h| !h.strip) {
+        if inside(hit.area) {
+            return hit.content();
+        }
+    }
+    // a boxed input: inside its border
+    let boxed = vs.bottom_rows.iter().find(|(y, h, id, _)| {
+        row >= *y
+            && row < y + h
+            && m.comp_as::<crate::widgets::Composer>(*id)
+                .is_some_and(|c| c.boxed)
+    });
+    if let Some(&(y, h, _, first)) = boxed {
+        let a = vs.bottom_area;
+        // the top border is the node's first row (unless scrolled off), the bottom its last
+        let top = if first == 0 { y + 1 } else { y };
+        let r = Rect::new(a.x + 2, top, a.width.saturating_sub(4), (y + h).saturating_sub(top + 1));
+        if inside(r) {
+            return r;
+        }
+    }
+    [vs.bottom_area, vs.main_area]
+        .into_iter()
+        .find(|r| inside(*r))
+        // (a literal: `Rect::new` would shrink it to fit u16 cells)
+        .unwrap_or(Rect { x: 0, y: 0, width: u16::MAX, height: u16::MAX })
+}
+
 pub(crate) fn focusable(m: &Model, mode: Mode) -> Vec<NodeId> {
     let full = mode == Mode::Fullscreen;
     let regions = [
@@ -487,6 +554,47 @@ fn cycle_area(m: &Model, vs: &mut ViewState, back: bool) {
         (None, _) => 0,
     };
     vs.focus = Some(firsts[next].1);
+}
+
+/// Keys while find is open: typing narrows, enter / ↑ go to the older match, shift+enter / ↓
+/// to the newer one, esc closes. Other keys (ctrl chords, pages) pass through.
+fn find_key(vs: &mut ViewState, code: KeyCode, mods: KeyModifiers) -> Option<Outcome> {
+    let find = vs.find.as_mut()?;
+    let ctrl = mods.contains(KeyModifiers::CONTROL);
+    match code {
+        KeyCode::Esc => {
+            vs.find = None;
+        }
+        KeyCode::Char('f') if ctrl => {
+            find.jump = true;
+        }
+        KeyCode::Enter if mods.contains(KeyModifiers::SHIFT) => {
+            find.current = find.current.saturating_sub(1);
+            find.jump = true;
+        }
+        KeyCode::Enter | KeyCode::Up => {
+            if find.current + 1 < find.total {
+                find.current += 1;
+            }
+            find.jump = true;
+        }
+        KeyCode::Down => {
+            find.current = find.current.saturating_sub(1);
+            find.jump = true;
+        }
+        KeyCode::Backspace => {
+            find.query.pop();
+            find.current = 0;
+            find.jump = true;
+        }
+        KeyCode::Char(c) if !ctrl => {
+            find.query.push(c);
+            find.current = 0;
+            find.jump = true;
+        }
+        _ => return None,
+    }
+    Some(Outcome::Redraw)
 }
 
 pub(crate) fn to_event(id: NodeId, e: Emit) -> Event {

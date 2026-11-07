@@ -47,6 +47,20 @@ pub(crate) struct PaneHit {
     pub title_row: Option<u16>,
 }
 
+impl PaneHit {
+    /// Where its content is drawn: no divider, no padding (what a selection in it covers).
+    pub fn content(&self) -> Rect {
+        let a = self.area;
+        let right = if self.left {
+            a.x + a.width - 1
+        } else {
+            a.x + a.width
+        };
+        let x = self.content_x.min(right);
+        Rect::new(x, a.y, right - x, a.height)
+    }
+}
+
 /// An in-progress divider drag.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Drag {
@@ -399,6 +413,11 @@ pub(crate) fn mouse(
             _ => {}
         }
     }
+    // a selection being dragged goes on across (and is kept inside its own area)
+    let selecting = vs.selection.is_some_and(|s| !s.done);
+    if selecting && matches!(kind, MouseEventKind::Drag(_) | MouseEventKind::Up(_)) {
+        return None;
+    }
     let inside = |r: Rect| col >= r.x && col < r.x + r.width && row >= r.y && row < r.y + r.height;
     if let Some(hit) = vs.pane_hits.iter().find(|h| inside(h.area)).cloned() {
         let content_w = hit.area.width.saturating_sub(3);
@@ -427,8 +446,10 @@ pub(crate) fn mouse(
                 true
             }
             MouseEventKind::Down(MouseButton::Left) => {
-                vs.selection = None;
-                click(m, vs, at, MouseAct::Click, content_w, events)
+                // the press clicks what is under it and may start a selection of the pane's text
+                let had = vs.selection.take().is_some_and(|s| s.anchor != s.head);
+                vs.selection = Some(super::Selection::new((col, row), hit.content()));
+                click(m, vs, at, MouseAct::Click, content_w, events) || had
             }
             MouseEventKind::Down(MouseButton::Middle) => {
                 click(m, vs, at, MouseAct::Middle, content_w, events)
@@ -439,9 +460,22 @@ pub(crate) fn mouse(
                 *top = if up { top.saturating_sub(3) } else { *top + 3 };
                 true
             }
-            // a press inside a pane started no selection: its drag and release are no-ops
             _ => false,
         });
+    }
+    // a control in an open cell (a form in a reply): it takes the click where it was drawn
+    if inside(vs.main_area) && kind == MouseEventKind::Down(MouseButton::Left) {
+        let hit = vs
+            .control_rows
+            .iter()
+            .find(|(y, h, _, x)| row >= *y && row < y + h && col >= *x)
+            .map(|&(y, _, id, x)| (id, row - y, col - x));
+        if let Some(at) = hit {
+            let width = vs.main_area.width;
+            vs.selection = None;
+            click(m, vs, Some(at), MouseAct::Click, width, events);
+            return Some(true);
+        }
     }
     // a page's tree or table in the transcript area
     if inside(vs.main_area) && kind == MouseEventKind::Down(MouseButton::Left) {
@@ -456,10 +490,13 @@ pub(crate) fn mouse(
         if kind != MouseEventKind::Down(MouseButton::Left) {
             return None;
         }
-        vs.selection = None;
+        // the press clicks what is under it and may start a selection of its text
+        let had = vs.selection.take().is_some_and(|s| s.anchor != s.head);
+        let bounds = super::input::selection_bounds(m, vs, col, row);
+        vs.selection = Some(super::Selection::new((col, row), bounds));
         let at = node_at(&vs.bottom_rows, vs.bottom_area.x, col, row);
         let width = vs.bottom_area.width;
-        return Some(click(m, vs, at, MouseAct::Click, width, events) || at.is_some());
+        return Some(click(m, vs, at, MouseAct::Click, width, events) || at.is_some() || had);
     }
     let head = vs.head_area;
     if inside(head) {

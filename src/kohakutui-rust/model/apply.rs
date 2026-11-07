@@ -6,8 +6,18 @@
 //! append-only and in order.
 
 use super::{Model, ModelError, Node, DOCS, FIRST_FREE, OVERLAYS, REGIONS};
-use crate::proto::{NodeId, Op};
+use crate::proto::value::get;
+use crate::proto::{NodeId, Op, Value};
 use crate::widgets::build;
+
+/// The `hidden` prop when the props set it: a bool, or null for the default (shown).
+fn hidden_prop(props: &Value) -> Option<bool> {
+    let v = get(props, "hidden")?;
+    if v.is_nil() {
+        return Some(false);
+    }
+    v.as_bool()
+}
 
 impl Model {
     /// Applies one tree op. Control ops (mode, bindings, notify) are the engine's.
@@ -33,6 +43,7 @@ impl Model {
                     children: Vec::new(),
                     comp,
                     sealed: false,
+                    hidden: hidden_prop(&props).unwrap_or(false),
                     version: 0,
                 });
                 self.attach(id, parent, index);
@@ -43,7 +54,11 @@ impl Model {
                 if self.in_scrollback(id) {
                     return Err(ModelError::Frozen(id));
                 }
-                self.open_node(id)?.comp.update(&props)?;
+                let node = self.open_node(id)?;
+                node.comp.update(&props)?;
+                if let Some(hidden) = hidden_prop(&props) {
+                    node.hidden = hidden;
+                }
                 self.bump(id);
                 Ok(id)
             }
@@ -93,6 +108,9 @@ impl Model {
             Op::SetMode { .. } => Err(ModelError::NotTreeOp("set_mode")),
             Op::Bind { .. } | Op::Unbind { .. } => Err(ModelError::NotTreeOp("bind")),
             Op::Notify { .. } => Err(ModelError::NotTreeOp("notify")),
+            Op::Title { .. } | Op::Alert { .. } => Err(ModelError::NotTreeOp("title")),
+            Op::Suspend | Op::Resume => Err(ModelError::NotTreeOp("suspend")),
+            Op::Scroll { .. } => Err(ModelError::NotTreeOp("scroll")),
             Op::Bell => Err(ModelError::NotTreeOp("bell")),
             Op::Copy { .. } => Err(ModelError::NotTreeOp("copy")),
             Op::SetLinks { .. } => Err(ModelError::NotTreeOp("set_links")),

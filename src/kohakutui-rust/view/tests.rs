@@ -210,6 +210,32 @@ fn user_messages_sit_on_a_full_width_band_and_others_do_not() {
 }
 
 #[test]
+fn a_hidden_node_is_not_drawn_or_focused_until_shown_again() {
+    let c = ctx();
+    let mut m = chat();
+    m.apply(Op::Seal { id: 22 }).unwrap();
+    create(&mut m, 40, "composer", BOTTOM, map(vec![("placeholder", "say hi".into())]));
+    create(&mut m, 41, "footer", BOTTOM, map(vec![("left", "model x".into())]));
+    take_flushable(&mut m, 60, &c);
+    let mut vs = ViewState::new(Mode::Inline);
+    let shown = |m: &Model, vs: &ViewState| texts(&inline(m, vs, 60, 20, &c).lines).join("\n");
+    assert!(shown(&m, &vs).contains("say hi"));
+
+    let hide = |hidden: Value| Op::Update { id: 40, props: map(vec![("hidden", hidden)]) };
+    m.apply(hide(true.into())).unwrap();
+    let rows = shown(&m, &vs);
+    assert!(!rows.contains("say hi") && rows.contains("model x"), "{rows}");
+    // its keys go nowhere: typing does not reach it
+    let mut events = Vec::new();
+    handle_input(&mut m, &mut vs, key(KeyCode::Char('a'), KeyModifiers::NONE), &mut events);
+    assert!(events.is_empty(), "{events:?}");
+
+    // null is the default: shown again
+    m.apply(hide(Value::Nil)).unwrap();
+    assert!(shown(&m, &vs).contains("say hi"));
+}
+
+#[test]
 fn a_docked_dialog_takes_the_input_box_place_and_keeps_every_key() {
     let c = ctx();
     let mut m = chat();
@@ -783,6 +809,49 @@ fn tab_reaches_a_control_in_an_open_reply_and_esc_gives_the_keys_back() {
 }
 
 #[test]
+fn a_click_on_a_control_in_an_open_full_screen_reply_reaches_it() {
+    let mut m = Model::new();
+    create(&mut m, 40, "composer", BOTTOM, Value::Map(vec![]));
+    create(&mut m, 50, "cell", TRANSCRIPT, map(vec![("role", "assistant".into())]));
+    create(&mut m, 51, "markdown", 50, map(vec![("source", "pick one".into())]));
+    let segments = Value::Array(vec![
+        map(vec![("label", "Start".into()), ("value", "start".into())]),
+        map(vec![("label", "Reset".into()), ("value", "reset".into())]),
+    ]);
+    create(&mut m, 52, "button", 50, map(vec![("segments", segments)]));
+    let mut vs = ViewState::new(Mode::Fullscreen);
+    let mut buf = Buffer::empty(Rect::new(0, 0, 60, 12));
+    fullscreen(&m, &mut vs, &mut buf, &ctx());
+    let row = (0..12u16)
+        .find(|&y| {
+            (0..60u16)
+                .map(|x| buf[(x, y)].symbol())
+                .collect::<String>()
+                .contains("Reset")
+        })
+        .expect("the button is drawn");
+    let line: String = (0..60u16).map(|x| buf[(x, row)].symbol()).collect();
+    let col = line.find("Reset").unwrap() as u16;
+
+    let mut events = Vec::new();
+    let press = MouseEventKind::Down(MouseButton::Left);
+    handle_mouse(&mut m, &mut vs, press, col + 1, row, &mut events);
+    assert!(
+        events.iter().any(
+            |e| matches!(e, Event::Select { id: 52, value, .. } if *value == Value::from("reset"))
+        ),
+        "{events:?}"
+    );
+
+    // a sealed reply's controls are static: the same click selects nothing
+    m.apply(Op::Seal { id: 50 }).unwrap();
+    fullscreen(&m, &mut vs, &mut buf, &ctx());
+    events.clear();
+    handle_mouse(&mut m, &mut vs, press, col + 1, row, &mut events);
+    assert!(!events.iter().any(|e| matches!(e, Event::Select { .. })), "{events:?}");
+}
+
+#[test]
 fn columns_sit_side_by_side_pack_or_stack_and_tabs_show_one_pane() {
     let mut m = Model::new();
     let text = |v: &str| map(vec![("value", v.into())]);
@@ -845,7 +914,7 @@ fn columns_sit_side_by_side_pack_or_stack_and_tabs_show_one_pane() {
 }
 
 #[test]
-fn a_click_on_a_link_in_full_screen_reports_its_url() {
+fn a_link_in_full_screen_highlights_under_the_pointer_and_a_click_reports_its_url() {
     let mut m = Model::new();
     create(
         &mut m,
@@ -861,6 +930,20 @@ fn a_click_on_a_link_in_full_screen_reports_its_url() {
     let &(row, x0, x1, _) = vs.link_hits.first().expect("a link was drawn");
     assert_eq!(x1 - x0, 4, "the four cells of `docs`");
 
+    // the pointer over the link highlights it; moving off clears it
+    let mut none = Vec::new();
+    assert!(handle_mouse(&mut m, &mut vs, MouseEventKind::Moved, x0 + 1, row, &mut none));
+    let id = vs.link_hover.expect("the link under the pointer");
+    super::hover_link(&mut buf, &vs.link_hits, id);
+    assert!(buf[(x0, row)]
+        .modifier
+        .contains(ratatui::style::Modifier::BOLD));
+    assert!(!buf[(x1 + 1, row)]
+        .modifier
+        .contains(ratatui::style::Modifier::BOLD));
+    assert!(handle_mouse(&mut m, &mut vs, MouseEventKind::Moved, x1 + 2, row, &mut none));
+    assert_eq!(vs.link_hover, None);
+
     let mut events = Vec::new();
     let press = MouseEventKind::Down(MouseButton::Left);
     let release = MouseEventKind::Up(MouseButton::Left);
@@ -875,4 +958,93 @@ fn a_click_on_a_link_in_full_screen_reports_its_url() {
     handle_mouse(&mut m, &mut vs, MouseEventKind::Drag(MouseButton::Left), x1, row, &mut events);
     handle_mouse(&mut m, &mut vs, release, x1, row, &mut events);
     assert!(events.is_empty(), "{events:?}");
+}
+
+#[test]
+fn ctrl_f_finds_in_the_full_screen_transcript_and_steps_between_matches() {
+    let mut m = chat();
+    let body = (0..40)
+        .map(|i| {
+            if i % 10 == 3 {
+                format!("needle {i}\n")
+            } else {
+                format!("line {i}\n")
+            }
+        })
+        .collect::<String>();
+    m.apply(Op::Append { id: 23, data: body.as_str().into() })
+        .unwrap();
+    create(&mut m, 40, "composer", BOTTOM, Value::Map(vec![]));
+    let mut vs = ViewState::new(Mode::Fullscreen);
+    vs.focus = Some(40);
+    let c = ctx();
+    let draw = |m: &Model, vs: &mut ViewState| {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 50, 12));
+        let caret = fullscreen(m, vs, &mut buf, &c);
+        let text = (0..12)
+            .map(|y| (0..50).map(|x| buf[(x, y)].symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n");
+        (text, caret)
+    };
+    let mut events = Vec::new();
+    let none = KeyModifiers::NONE;
+    handle_input(&mut m, &mut vs, key(KeyCode::Char('f'), KeyModifiers::CONTROL), &mut events);
+    for ch in "needle".chars() {
+        handle_input(&mut m, &mut vs, key(KeyCode::Char(ch), none), &mut events);
+    }
+    let (screen, caret) = draw(&m, &mut vs);
+    assert!(screen.contains("find: needle  4/4"), "{screen}");
+    assert!(screen.contains("needle 33"), "the newest match is in view: {screen}");
+    let caret_row = caret.map(|(_, y)| y as usize);
+    assert!(caret_row.is_some_and(|y| screen.lines().nth(y).unwrap().contains("find:")));
+    // older matches
+    for _ in 0..3 {
+        handle_input(&mut m, &mut vs, key(KeyCode::Enter, none), &mut events);
+    }
+    let (screen, _) = draw(&m, &mut vs);
+    assert!(screen.contains("1/4") && screen.contains("needle 3 "), "{screen}");
+    handle_input(&mut m, &mut vs, key(KeyCode::Down, none), &mut events);
+    let (screen, _) = draw(&m, &mut vs);
+    assert!(screen.contains("2/4") && screen.contains("needle 13"), "{screen}");
+    assert!(events.is_empty(), "the composer never saw the keys: {events:?}");
+    handle_input(&mut m, &mut vs, key(KeyCode::Esc, none), &mut events);
+    let (screen, _) = draw(&m, &mut vs);
+    assert!(!screen.contains("find:"));
+}
+
+#[test]
+fn a_cell_with_actions_is_navigable_and_its_keys_become_actions() {
+    let mut m = Model::new();
+    let actions = Value::Array(vec![map(vec![
+        ("key", "c".into()),
+        ("label", "copy".into()),
+        ("value", "copy".into()),
+    ])]);
+    create(
+        &mut m,
+        20,
+        "cell",
+        TRANSCRIPT,
+        map(vec![("role", "user".into()), ("actions", actions)]),
+    );
+    create(&mut m, 21, "text", 20, map(vec![("value", "hello".into())]));
+    m.apply(Op::Seal { id: 20 }).unwrap();
+    create(&mut m, 40, "composer", BOTTOM, Value::Map(vec![]));
+    let mut vs = ViewState::new(Mode::Fullscreen);
+    vs.focus = Some(40);
+    let c = ctx();
+    let mut buf = Buffer::empty(Rect::new(0, 0, 40, 8));
+    fullscreen(&m, &mut vs, &mut buf, &c);
+    let mut events = Vec::new();
+    handle_input(&mut m, &mut vs, key(KeyCode::Up, KeyModifiers::CONTROL), &mut events);
+    assert_eq!(vs.nav, Some(20));
+    let mut buf = Buffer::empty(Rect::new(0, 0, 40, 8));
+    fullscreen(&m, &mut vs, &mut buf, &c);
+    let screen: String = (0..8)
+        .map(|y| (0..40).map(|x| buf[(x, y)].symbol()).collect::<String>() + "\n")
+        .collect();
+    assert!(screen.contains("c copy"), "{screen}");
+    handle_input(&mut m, &mut vs, key(KeyCode::Char('c'), KeyModifiers::NONE), &mut events);
+    assert_eq!(events, vec![Event::Action { name: "copy".into(), focus: Some(20) }]);
 }

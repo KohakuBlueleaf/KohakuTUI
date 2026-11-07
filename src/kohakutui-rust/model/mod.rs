@@ -40,6 +40,8 @@ pub struct Node {
     pub children: Vec<NodeId>,
     pub comp: Box<dyn Component>,
     pub sealed: bool,
+    /// Not laid out, drawn or focused (the `hidden` prop, which every kind takes).
+    pub hidden: bool,
     /// Bumped on every change to the node or a descendant.
     pub version: u64,
 }

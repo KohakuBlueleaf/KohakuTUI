@@ -4,6 +4,9 @@ Every component is a dataclass in `kohakutui` (also `kohakutui.ui`). Pass it to 
 it later with `node.update(prop=value)`. Props left as `None` use the default. Containers
 (`Stack`, `Cell`, `Scroll`, `Columns`, `Tabs`) take `children=[...]`.
 
+Every node also takes `node.update(hidden=True)`: it and its children are not drawn, take no
+focus and no keys, and keep their state (an input keeps its draft); `hidden=None` shows it again.
+
 `tone` props take a colour role (`muted`, `faint`, `accent`, `tool`, `agent`, `running`,
 `attention`, `danger`, `ok`, …), a palette name or `#rrggbb`; see [Themes](themes.md).
 
