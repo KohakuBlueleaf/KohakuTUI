@@ -94,6 +94,18 @@ impl Tree {
         }
     }
 
+    fn reveal_cursor(&self) {
+        if self.height == 0 {
+            return;
+        }
+        let top = self.top.get();
+        if self.cursor < top {
+            self.top.set(self.cursor);
+        } else if self.cursor >= top + self.height {
+            self.top.set(self.cursor + 1 - self.height);
+        }
+    }
+
     fn select(&mut self, rows: &[Row], out: &mut Vec<Emit>) {
         if let Some(r) = rows.get(self.cursor) {
             out.push(Emit::Select { index: self.cursor as u32, value: r.value.as_str().into() });
@@ -107,6 +119,7 @@ impl Component for Tree {
     }
 
     fn update(&mut self, p: &Value) -> Result<(), WidgetError> {
+        let previous_cursor = self.cursor;
         if let Some(v) = get(p, "items") {
             self.items = v.clone();
         }
@@ -118,6 +131,9 @@ impl Component for Tree {
             }
         }
         self.cursor = self.cursor.min(self.rows().len().saturating_sub(1));
+        if previous_cursor != self.cursor {
+            self.reveal_cursor();
+        }
         Ok(())
     }
 
@@ -126,14 +142,8 @@ impl Component for Tree {
         if rows.is_empty() {
             return vec![Line::from(Span::styled("(empty)", theme::faint()))];
         }
-        // a fixed height keeps the cursor row in view
         let (start, end) = if self.height > 0 && rows.len() > self.height {
-            let mut top = self.top.get().min(rows.len() - self.height);
-            if self.cursor < top {
-                top = self.cursor;
-            } else if self.cursor >= top + self.height {
-                top = self.cursor + 1 - self.height;
-            }
+            let top = self.top.get().min(rows.len() - self.height);
             self.top.set(top);
             (top, top + self.height)
         } else {
@@ -210,14 +220,28 @@ impl Component for Tree {
             }
             _ => return false,
         }
+        self.reveal_cursor();
         true
     }
 
     fn on_mouse(&mut self, m: &Mouse, out: &mut Vec<Emit>) -> bool {
-        if m.act != MouseAct::Click {
-            return false;
-        }
         let rows = self.rows();
+        match m.act {
+            MouseAct::ScrollUp | MouseAct::ScrollDown => {
+                if self.height == 0 {
+                    return false;
+                }
+                let top = self.top.get();
+                self.top.set(if m.act == MouseAct::ScrollUp {
+                    top.saturating_sub(3)
+                } else {
+                    (top + 3).min(rows.len().saturating_sub(self.height))
+                });
+                return true;
+            }
+            MouseAct::Click => {}
+            _ => return false,
+        }
         let at = self.drawn_top.get() + m.row as usize;
         let Some(row) = rows.get(at).cloned() else {
             return false;

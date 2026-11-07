@@ -1146,3 +1146,34 @@ fn image_draws_two_pixels_per_cell_and_scales_down() {
     let empty = build("image", &map(vec![("alt", "pic".into())])).unwrap();
     assert_eq!(texts(empty.as_ref(), 20), vec!["[image: pic]"]);
 }
+
+#[test]
+fn tree_wheel_scrolls_without_changing_selection() {
+    let items = (0..20)
+        .map(|i| map(vec![("label", format!("run-{i:02}").into())]))
+        .collect();
+    let mut tree =
+        build("tree", &map(vec![("items", Value::Array(items)), ("height", 4.into())])).unwrap();
+    let mut out = Vec::new();
+    for _ in 0..10 {
+        tree.on_mouse(&Mouse { act: MouseAct::ScrollDown, row: 0, col: 0, width: 24 }, &mut out);
+    }
+    assert!(texts(tree.as_ref(), 24)[3].contains("run-19"));
+    assert!(out.is_empty());
+    tree.update(&map(vec![("selected", "run-00".into())]))
+        .unwrap();
+    assert!(texts(tree.as_ref(), 24)[3].contains("run-19"));
+    let selected = keys(tree.as_mut(), &[(KeyCode::Enter, KeyModifiers::NONE)], TYPED);
+    assert!(
+        matches!(selected.last(), Some(Emit::Select { value, .. }) if *value == Value::from("run-00"))
+    );
+    assert!(texts(tree.as_ref(), 24)[0].contains("run-00"));
+    tree.on_mouse(&Mouse { act: MouseAct::ScrollDown, row: 0, col: 0, width: 24 }, &mut out);
+    assert!(texts(tree.as_ref(), 24)[0].contains("run-03"));
+    tree.on_mouse(&Mouse { act: MouseAct::Click, row: 1, col: 3, width: 24 }, &mut out);
+    assert!(
+        matches!(out.last(), Some(Emit::Select { value, .. }) if *value == Value::from("run-04"))
+    );
+    keys(tree.as_mut(), &[(KeyCode::End, KeyModifiers::NONE)], TYPED);
+    assert!(texts(tree.as_ref(), 24)[3].contains("run-19"));
+}
